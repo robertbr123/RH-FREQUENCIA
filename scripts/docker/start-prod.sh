@@ -27,16 +27,16 @@ fi
 
 # Build e start
 echo "🔨 Construindo imagens Docker..."
-docker-compose build
+docker compose build
 
 echo "🚀 Iniciando containers..."
-docker-compose up -d
+docker compose up -d
 
 echo ""
 echo "✅ Sistema iniciado com sucesso!"
 echo ""
 echo "📊 Verificando status dos containers..."
-docker-compose ps
+docker compose ps
 
 echo ""
 echo "🌐 Acesse a aplicação:"
@@ -48,8 +48,8 @@ echo "   Usuário: admin"
 echo "   Senha: admin123"
 echo ""
 echo "📝 Comandos úteis:"
-echo "   Ver logs: docker-compose logs -f"
-echo "   Parar: docker-compose stop"
-echo "   Reiniciar: docker-compose restart"
+echo "   Ver logs: docker compose logs -f"
+echo "   Parar: docker compose stop"
+echo "   Reiniciar: docker compose restart"
 echo ""
 echo "⚠️  Lembre-se de trocar as senhas padrão em produção!"
