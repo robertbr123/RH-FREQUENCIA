@@ -47,8 +47,7 @@ temp/
 
 # Backups
 backups/
-*.sql
-*.sql.gz
+
 
 # Docker volumes (dados locais)
 postgres_data/
