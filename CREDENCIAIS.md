@@ -17,8 +17,8 @@ Todos os usuários padrão têm a mesma senha: **admin123**
 ## Acesso ao Sistema
 
 ### Frontend (Interface Web)
-- **URL**: http://localhost
-- **Porta**: 80
+- **URL**: http://localhost:8080 (Linux/macOS) ou http://localhost (Windows com docker-compose.port80.yml)
+- **Porta**: 8080 (padrão) ou 80 (requer sudo no Linux)
 
 ### Backend (API)
 - **URL**: http://localhost:3001/api

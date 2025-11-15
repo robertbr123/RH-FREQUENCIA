@@ -25,8 +25,11 @@ make prod
 # ou
 ./scripts/docker/start-prod.sh
 
-# Acesse: http://localhost
+# Acesse: http://localhost:8080
 # Login: admin / admin123
+
+# Para usar porta 80 (requer sudo):
+# sudo docker-compose -f docker-compose.port80.yml up -d
 ```
 
 📖 **Documentação completa Docker:** [README-DOCKER.md](./README-DOCKER.md)  

@@ -1,3 +1,7 @@
+# Docker Compose - Configuração com porta 80 (requer sudo/root)
+# Use este arquivo se você tiver acesso root e quiser usar porta 80
+# Comando: sudo docker-compose -f docker-compose.port80.yml up -d
+
 services:
   # Banco de dados PostgreSQL
   db:
@@ -61,11 +65,16 @@ services:
     environment:
       TZ: America/Rio_Branco
     ports:
-      - "8080:80"  # Porta 8080 (host) -> 80 (container) - compatível com Linux sem sudo
+      - "80:80"
     depends_on:
       - api
     networks:
       - rhf-network
+    # Adiciona capacidades para usar porta 80
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - apparmor:unconfined
 
 volumes:
   postgres_data:
