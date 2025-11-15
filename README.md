@@ -20,6 +20,23 @@ cd RH-FREQUENCIA
 # Execute o teste de configuração
 ./scripts/docker/test-setup.sh
 
+
+### Opção 2: Container Não Privilegiado (Mais Seguro)
+
+Se preferir usar LXC não privilegiado, adicione estas configurações:
+
+```bash
+# No host Proxmox, edite o arquivo de configuração do container
+# Substitua 100 pelo ID do seu container
+nano /etc/pve/lxc/100.conf
+
+# Adicione estas linhas: IMPORTANTE ISSO PARA LXC
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: a
+lxc.cap.drop:
+lxc.mount.auto: proc:rw sys:rw
+```
+
 # Inicie o sistema
 make prod
 # ou
@@ -33,7 +50,9 @@ make prod
 ```
 
 📖 **Documentação completa Docker:** [README-DOCKER.md](./README-DOCKER.md)  
-⚡ **Guia rápido:** [DOCKER-QUICKSTART.md](./DOCKER-QUICKSTART.md)
+⚡ **Guia rápido:** [DOCKER-QUICKSTART.md](./DOCKER-QUICKSTART.md)  
+🐧 **Instalação Linux:** [LINUX-SETUP.md](./LINUX-SETUP.md)  
+🔧 **Proxmox LXC:** [PROXMOX-LXC.md](./PROXMOX-LXC.md)
 
 ---
 
