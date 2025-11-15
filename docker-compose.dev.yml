@@ -1,0 +1,82 @@
+services:
+  # Banco de dados PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: rhf-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rhf_db_dev
+      POSTGRES_USER: rhf_user
+      POSTGRES_PASSWORD: rhf_dev_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=pt_BR.UTF-8"
+      TZ: America/Rio_Branco
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./scripts/seed-data.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rhf_user -d rhf_db_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rhf-network-dev
+
+  # Backend/API com hot-reload
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api.dev
+    container_name: rhf-api-dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://rhf_user:rhf_dev_password@db:5432/rhf_db_dev
+      JWT_SECRET: dev_jwt_secret_change_in_production
+      TZ: America/Rio_Branco
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+    ports:
+      - "3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - rhf-network-dev
+    command: npm run dev
+
+  # Frontend com hot-reload
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client.dev
+    container_name: rhf-client-dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      TZ: America/Rio_Branco
+      VITE_API_URL: http://localhost:3001
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    networks:
+      - rhf-network-dev
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data_dev:
+    name: rhf-postgres-data-dev
+
+networks:
+  rhf-network-dev:
+    name: rhf-network-dev
+    driver: bridge

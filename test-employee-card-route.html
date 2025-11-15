@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Teste Employee Card Route</title>
+</head>
+<body>
+    <h1>Teste de Rota Employee Card</h1>
+    <button onclick="testRoute()">Testar Rota</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function testRoute() {
+            const result = document.getElementById('result');
+            result.textContent = 'Testando...';
+
+            try {
+                const response = await fetch('https://rhf-beta.vercel.app/api/employee-card/check-attendance', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        cpf: '12345678900'
+                    })
+                });
+
+                const data = await response.json();
+                result.textContent = `Status: ${response.status}\n\nResponse:\n${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                result.textContent = `Erro: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

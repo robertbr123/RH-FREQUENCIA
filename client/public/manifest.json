@@ -1,0 +1,48 @@
+{
+  "name": "RH Sistema de Frequência",
+  "short_name": "RH Frequência",
+  "description": "Sistema de Gestão de Recursos Humanos e Controle de Frequência",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Scanner de Ponto",
+      "short_name": "Scanner",
+      "description": "Abrir scanner de ponto",
+      "url": "/scanner",
+      "icons": [{
+        "src": "/icon-192.png",
+        "sizes": "192x192"
+      }]
+    },
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "Ver estatísticas",
+      "url": "/",
+      "icons": [{
+        "src": "/icon-192.png",
+        "sizes": "192x192"
+      }]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# Dockerfile para Client - Desenvolvimento com hot-reload
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copiar package.json
+COPY client/package.json ./
+
+# Instalar dependências
+RUN npm install
+
+# Expor porta do Vite
+EXPOSE 5173
+
+# Comando para desenvolvimento
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
