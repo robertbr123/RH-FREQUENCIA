@@ -9,6 +9,13 @@ import autoTable from 'jspdf-autotable'
 interface Employee {
   id: number
   name: string
+  department_id?: number
+  department_name?: string
+}
+
+interface Department {
+  id: number
+  name: string
 }
 
 interface Holiday {
@@ -53,9 +60,12 @@ export default function Reports() {
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [vacations, setVacations] = useState<Vacation[]>([])
   const [reportType, setReportType] = useState<'individual' | 'general'>('individual')
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [selectedDepartment, setSelectedDepartment] = useState<number | null>(null)
 
   useEffect(() => {
     loadEmployees()
+    loadDepartments()
   }, [])
 
   const loadEmployees = async () => {
@@ -67,6 +77,18 @@ export default function Reports() {
       setEmployees(response.data.filter((e: any) => e.status === 'active'))
     } catch (error) {
       console.error('Erro ao carregar funcionários:', error)
+    }
+  }
+
+  const loadDepartments = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/organization/departments', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setDepartments(response.data)
+    } catch (error) {
+      console.error('Erro ao carregar departamentos:', error)
     }
   }
 
@@ -759,13 +781,26 @@ export default function Reports() {
         if (!employeeMap.has(emp.id)) {
           employeeMap.set(emp.id, {
             name: emp.name,
+            department_id: emp.department_id,
+            department_name: emp.department_name,
             records: []
           })
+        } else {
+          // Adicionar department info aos que já existem
+          const existing = employeeMap.get(emp.id)
+          existing.department_id = emp.department_id
+          existing.department_name = emp.department_name
         }
       })
 
+      // Filtrar por departamento se selecionado
+      let filteredEmployees = Array.from(employeeMap.entries())
+      if (selectedDepartment) {
+        filteredEmployees = filteredEmployees.filter(([_, data]) => data.department_id === selectedDepartment)
+      }
+
       // Ordenar alfabeticamente
-      const sortedEmployees = Array.from(employeeMap.entries())
+      const sortedEmployees = filteredEmployees
         .sort((a, b) => a[1].name.localeCompare(b[1].name))
 
       // Criar PDF em modo paisagem
@@ -795,6 +830,14 @@ export default function Reports() {
       doc.setFontSize(9)
       doc.setFont('helvetica', 'normal')
       doc.text(`Gerado em: ${format(new Date(), "dd/MM/yyyy 'às' HH:mm")}`, 14, yPos)
+      
+      // Adicionar filtro de departamento se aplicado
+      if (selectedDepartment) {
+        const deptName = departments.find(d => d.id === selectedDepartment)?.name || 'N/A'
+        doc.text(`Departamento: ${deptName}`, 14, yPos + 5)
+        yPos += 5
+      }
+      
       doc.text(`Total de funcionários: ${sortedEmployees.length}`, 200, yPos)
       
       yPos += 10
@@ -958,7 +1001,7 @@ export default function Reports() {
             </div>
           </div>
 
-          <div className={`grid gap-6 ${reportType === 'individual' ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <div className={`grid gap-6 ${reportType === 'individual' ? 'grid-cols-2' : 'grid-cols-2'}`}>
             {reportType === 'individual' && (
               <div>
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
@@ -974,6 +1017,26 @@ export default function Reports() {
                   {employees.map((emp) => (
                     <option key={emp.id} value={emp.id}>
                       {emp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {reportType === 'general' && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  Departamento (Opcional)
+                </label>
+                <select
+                  value={selectedDepartment || ''}
+                  onChange={(e) => setSelectedDepartment(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white focus:border-transparent"
+                >
+                  <option value="">Todos os departamentos</option>
+                  {departments.map((dept) => (
+                    <option key={dept.id} value={dept.id}>
+                      {dept.name}
                     </option>
                   ))}
                 </select>

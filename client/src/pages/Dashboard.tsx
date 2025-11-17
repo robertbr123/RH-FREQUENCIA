@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Users, Clock, CheckCircle, XCircle, TrendingUp, UserCheck, UserX, Calendar, Briefcase, Building2, Cake, Umbrella, ArrowUp, ArrowDown, Minus, Award, Timer } from 'lucide-react'
+import { Users, Clock, CheckCircle, XCircle, TrendingUp, UserCheck, UserX, Calendar, Briefcase, Building2, Cake, Umbrella, ArrowUp, ArrowDown, Minus, Award, Timer, MessageCircle } from 'lucide-react'
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 
@@ -44,6 +44,7 @@ interface Birthday {
   birth_date: string
   position_name: string
   photo_url?: string
+  phone?: string
 }
 
 interface Vacation {
@@ -313,7 +314,8 @@ export default function Dashboard() {
           name: emp.name,
           birth_date: emp.birth_date,
           position_name: emp.position_name || 'Não informado',
-          photo_url: emp.photo_url
+          photo_url: emp.photo_url,
+          phone: emp.phone
         }))
         .sort((a: any, b: any) => {
           // Ordenar por dia do mês
@@ -745,6 +747,26 @@ export default function Dashboard() {
                       )}
                     </div>
                   </div>
+                  
+                  {birthday.phone && (
+                    <button
+                      onClick={() => {
+                        const phone = birthday.phone!.replace(/\D/g, '')
+                        const firstName = birthday.name.split(' ')[0]
+                        const message = `*Olá ${firstName}*! \n\nFeliz Aniversário! Desejamos um dia cheio de alegrias, realizações e muitas felicidades!\n\nQue este novo ciclo de vida traga ainda mais alegrias e conquistas, tanto pessoais quanto profissionais.\n\n Parabéns! e Feliz aniversário\n\n *SEMSA*`
+                        const whatsappUrl = `https://wa.me/55${phone}?text=${encodeURIComponent(message)}`
+                        window.open(whatsappUrl, '_blank')
+                      }}
+                      className={`flex-shrink-0 p-2 rounded-lg transition-all duration-200 ${
+                        isToday
+                          ? 'bg-green-500 hover:bg-green-600 text-white shadow-md'
+                          : 'bg-green-100 hover:bg-green-200 text-green-700 dark:bg-green-900/30 dark:hover:bg-green-900/50 dark:text-green-400'
+                      }`}
+                      title="Enviar mensagem de feliz aniversário pelo WhatsApp"
+                    >
+                      <MessageCircle className="w-5 h-5" />
+                    </button>
+                  )}
                 </div>
               )
             })}
