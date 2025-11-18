@@ -323,10 +323,13 @@ app.use((req, res) => {
 // Export for Vercel
 export default app;
 
-// For local development
-if (process.env.NODE_ENV !== 'production') {
+// Start server (for Docker and local development)
+// Only skip if explicitly running in Vercel serverless environment
+if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`📊 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
   });
 }
