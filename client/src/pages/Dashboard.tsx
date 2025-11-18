@@ -292,7 +292,10 @@ export default function Dashboard() {
           const birthDateStr = String(emp.birth_date)
           console.log(`🔍 Processando ${emp.name}: ${birthDateStr}`)
           
-          const birthDate = new Date(birthDateStr)
+          // Se já tem timezone (T...Z), usar diretamente. Senão, adicionar T00:00:00
+          const birthDate = birthDateStr.includes('T') 
+            ? new Date(birthDateStr) 
+            : new Date(birthDateStr + 'T00:00:00')
           const birthMonth = birthDate.getMonth() + 1
           const birthDay = birthDate.getDate()
           
@@ -319,9 +322,11 @@ export default function Dashboard() {
         }))
         .sort((a: any, b: any) => {
           // Ordenar por dia do mês
-          const dayA = new Date(a.birth_date).getDate()
-          const dayB = new Date(b.birth_date).getDate()
-          return dayA - dayB
+          const birthDateA = String(a.birth_date)
+          const birthDateB = String(b.birth_date)
+          const dateA = birthDateA.includes('T') ? new Date(birthDateA) : new Date(birthDateA + 'T00:00:00')
+          const dateB = birthDateB.includes('T') ? new Date(birthDateB) : new Date(birthDateB + 'T00:00:00')
+          return dateA.getDate() - dateB.getDate()
         })
 
       console.log('🎂 Total de aniversariantes do mês:', birthdaysThisMonth.length)
@@ -677,13 +682,28 @@ export default function Dashboard() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {birthdays.map((birthday) => {
-              const birthDate = new Date(birthday.birth_date)
+              const birthDateStr = String(birthday.birth_date)
+              const birthDate = birthDateStr.includes('T') 
+                ? new Date(birthDateStr) 
+                : new Date(birthDateStr + 'T00:00:00')
               const day = birthDate.getDate()
+              
+              // Para exibição, extrair dia/mês diretamente da string para evitar timezone
+              const dateOnly = birthDateStr.split('T')[0] // "1995-11-25"
+              const [year, month, dayStr] = dateOnly.split('-')
+              const displayDay = parseInt(dayStr, 10)
+              const displayMonth = parseInt(month, 10)
+              
               const today = new Date().getDate()
               const currentMonth = new Date().getMonth()
-              const isToday = day === today
-              const daysUntil = day - today
-              const isPast = day < today
+              const isToday = displayDay === today
+              const daysUntil = displayDay - today
+              const isPast = displayDay < today
+              
+              // Nome do mês em português
+              const monthNames = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 
+                                 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+              const monthName = monthNames[displayMonth - 1]
               
               return (
                 <div 
@@ -738,7 +758,7 @@ export default function Dashboard() {
                       <p className={`text-xs font-medium ${
                         isToday ? 'text-pink-700 dark:text-pink-400' : 'text-pink-600 dark:text-pink-500'
                       }`}>
-                        {format(birthDate, "dd 'de' MMMM", { locale: ptBR })}
+                        {displayDay} de {monthName}
                       </p>
                       {!isToday && !isPast && daysUntil > 0 && daysUntil <= 7 && (
                         <span className="text-xs bg-pink-200 dark:bg-pink-900/50 text-pink-700 dark:text-pink-300 px-2 py-0.5 rounded-full">

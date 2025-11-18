@@ -489,6 +489,61 @@ router.get('/punches', authenticateToken, async (req, res) => {
   }
 });
 
+// ADMIN: Criar ponto manual
+router.post('/punches', authenticateToken, async (req, res) => {
+  const { employee_id, date, punch_type, time } = req.body;
+
+  try {
+    console.log('➕ Criando ponto manual:', { employee_id, date, punch_type, time });
+
+    // Validar campos obrigatórios
+    if (!employee_id || !date || !punch_type || !time) {
+      return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+    }
+
+    // Criar timestamp sem conversão de timezone
+    const punchTimestamp = `${date} ${time}`;
+    
+    console.log('🕐 Timestamp do ponto:', punchTimestamp);
+
+    // Verificar se já existe um ponto do mesmo tipo no mesmo dia
+    const existing = await pool.query(
+      `SELECT id FROM attendance_punches 
+       WHERE employee_id = $1 AND date = $2 AND punch_type = $3`,
+      [employee_id, date, punch_type]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ 
+        error: 'Já existe um registro deste tipo para este funcionário nesta data' 
+      });
+    }
+
+    // Inserir novo ponto
+    const result = await pool.query(
+      `INSERT INTO attendance_punches (employee_id, date, punch_type, punch_time)
+       VALUES ($1, $2, $3, $4::timestamp)
+       RETURNING *`,
+      [employee_id, date, punch_type, punchTimestamp]
+    );
+
+    console.log('✅ Ponto criado com sucesso:', result.rows[0]);
+
+    res.json({ success: true, message: 'Ponto criado com sucesso', punch: result.rows[0] });
+  } catch (error) {
+    console.error('❌ Erro ao criar ponto:', error);
+    
+    // Verificar violação de constraint
+    if (error.code === '23505') { // unique violation
+      return res.status(400).json({ 
+        error: 'Já existe um registro deste tipo para este dia' 
+      });
+    }
+    
+    res.status(500).json({ error: 'Erro ao criar ponto' });
+  }
+});
+
 // ADMIN: Atualizar ponto individual
 router.put('/punches/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;

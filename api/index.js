@@ -10,6 +10,7 @@ import employeeCardRoutes from './routes/employee-card.js';
 import usersRoutes from './routes/users.js';
 import settingsRoutes from './routes/settings.js';
 import migrateHolidaysRoutes from './routes/migrate-holidays.js';
+import absencesRoutes from './routes/absences.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -58,6 +59,7 @@ app.use('/api/organization', organizationRoutes);
 app.use('/api/employee-card', employeeCardRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/migrate-holidays', migrateHolidaysRoutes);
+app.use('/api/absences', absencesRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -321,12 +323,10 @@ app.use((req, res) => {
 // Export for Vercel
 export default app;
 
-// Start server (except when running on Vercel)
-if (!process.env.VERCEL) {
+// For local development
+if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3001;
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    console.log(`📊 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`💾 Banco: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'}`);
   });
 }

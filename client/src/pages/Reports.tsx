@@ -59,6 +59,7 @@ export default function Reports() {
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [vacations, setVacations] = useState<Vacation[]>([])
+  const [absences, setAbsences] = useState<any[]>([])
   const [reportType, setReportType] = useState<'individual' | 'general'>('individual')
   const [departments, setDepartments] = useState<Department[]>([])
   const [selectedDepartment, setSelectedDepartment] = useState<number | null>(null)
@@ -115,8 +116,8 @@ export default function Reports() {
         month_date: monthDate,
       })
 
-      // Buscar dados de frequência, feriados e férias em paralelo
-      const [attendanceResponse, holidaysResponse, vacationsResponse] = await Promise.all([
+      // Buscar dados de frequência, feriados, férias e dados do funcionário em paralelo
+      const [attendanceResponse, holidaysResponse, vacationsResponse, employeeResponse, absencesResponse] = await Promise.all([
         axios.get('/api/attendance', {
           headers: { Authorization: `Bearer ${token}` },
           params: {
@@ -131,9 +132,24 @@ export default function Reports() {
         axios.get(`/api/organization/vacations/month/${year}/${monthNum}`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
+        axios.get(`/api/employees/${selectedEmployee}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        axios.get(`/api/absences/employee/${selectedEmployee}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            start_date: startDate,
+            end_date: endDate,
+          },
+        }),
       ])
 
-      // Armazenar feriados e férias
+      // Obter horário de trabalho do funcionário
+      const employeeData = employeeResponse.data
+      const workdays = employeeData.workdays || []
+      console.log('📅 Dias de trabalho do funcionário:', workdays)
+
+      // Armazenar feriados, férias e ausências
       setHolidays(holidaysResponse.data)
       const allVacations = vacationsResponse.data || []
       console.log('🏖️ Todas as férias do mês:', allVacations)
@@ -142,6 +158,10 @@ export default function Reports() {
       const employeeVacations = allVacations.filter((v: Vacation) => v.employee_id === selectedEmployee)
       console.log('🏖️ Férias do funcionário selecionado:', employeeVacations)
       setVacations(employeeVacations)
+
+      const employeeAbsences = absencesResponse.data || []
+      console.log('🚫 Ausências do funcionário:', employeeAbsences)
+      setAbsences(employeeAbsences)
 
       // Criar mapa de feriados por data
       const holidayMap = new Map()
@@ -185,6 +205,24 @@ export default function Reports() {
         return result
       }
 
+      // Função para verificar se uma data está em período de ausência
+      const getAbsenceInfo = (dateStr: string) => {
+        return employeeAbsences.find((absence: any) => {
+          const startDateStr = typeof absence.start_date === 'string' 
+            ? absence.start_date.split('T')[0] 
+            : absence.start_date
+          const endDateStr = typeof absence.end_date === 'string' 
+            ? absence.end_date.split('T')[0] 
+            : absence.end_date
+            
+          const absenceStart = new Date(startDateStr + 'T00:00:00')
+          const absenceEnd = new Date(endDateStr + 'T00:00:00')
+          const checkDate = new Date(dateStr + 'T00:00:00')
+          
+          return checkDate >= absenceStart && checkDate <= absenceEnd
+        })
+      }
+
       // Criar array com todos os dias do mês
       const daysInMonth = eachDayOfInterval({
         start: startOfMonth(monthDate),
@@ -218,8 +256,27 @@ export default function Reports() {
       console.log('🗺️  Mapa de attendance criado:', Array.from(attendanceMap.keys()))
       console.log('🗺️  Total de datas no mapa:', attendanceMap.size)
 
+      // Mapear dias da semana para índices (0 = domingo, 1 = segunda, ..., 6 = sábado)
+      const dayOfWeekMap: Record<string, number> = {
+        'domingo': 0,
+        'segunda': 1,
+        'terça': 2,
+        'quarta': 3,
+        'quinta': 4,
+        'sexta': 5,
+        'sábado': 6
+      }
+      
+      // Criar set com os dias de trabalho do funcionário
+      const workdaySet = new Set(
+        workdays.map((day: string) => dayOfWeekMap[day.toLowerCase()] ?? -1).filter((d: number) => d !== -1)
+      )
+      console.log('📅 Set de dias de trabalho (0-6):', Array.from(workdaySet))
+
       const fullMonthData = daysInMonth.map((day) => {
         const dateStr = format(day, 'yyyy-MM-dd')
+        const dayOfWeek = day.getDay() // 0 = domingo, 6 = sábado
+        const isWorkday = workdaySet.size === 0 || workdaySet.has(dayOfWeek) // Se não tem horário definido, considera todos os dias
         const record = attendanceMap.get(dateStr)
         const holiday = holidayMap.get(dateStr)
         const onVacation = isOnVacation(dateStr)
@@ -247,16 +304,40 @@ export default function Reports() {
           observation = 'EM FÉRIAS'
           console.log(`   🏖️ Funcionário em férias`)
         }
-        // Verificar se é feriado (apenas se não estiver em férias)
-        else if (holiday) {
-          const typeLabel = 
-            holiday.type === 'federal' ? 'Feriado Federal' :
-            holiday.type === 'estadual' ? 'Feriado Estadual' :
-            holiday.type === 'municipal' ? 'Feriado Municipal' :
-            'Ponto Facultativo'
-          
-          observation = `${typeLabel}: ${holiday.name}`
-          console.log(`   🎉 Feriado: ${observation}`)
+        // Verificar se está em ausência justificada (folga, atestado, etc)
+        else {
+          const absenceInfo = getAbsenceInfo(dateStr)
+          if (absenceInfo) {
+            const absenceTypeLabels: Record<string, string> = {
+              'folga': 'FOLGA',
+              'atestado': 'ATESTADO MÉDICO',
+              'licenca': 'LICENÇA',
+              'falta_justificada': 'FALTA JUSTIFICADA',
+              'outros': 'AUSÊNCIA JUSTIFICADA'
+            }
+            const typeLabel = absenceTypeLabels[absenceInfo.absence_type] || absenceInfo.absence_type.toUpperCase()
+            observation = absenceInfo.observation 
+              ? `${typeLabel}: ${absenceInfo.observation}` 
+              : typeLabel
+            console.log(`   🚫 Ausência: ${observation}`)
+          }
+          // Verificar se é feriado (apenas se não estiver em férias ou ausência)
+          else if (holiday) {
+            const typeLabel = 
+              holiday.type === 'federal' ? 'Feriado Federal' :
+              holiday.type === 'estadual' ? 'Feriado Estadual' :
+              holiday.type === 'municipal' ? 'Feriado Municipal' :
+              'Ponto Facultativo'
+            
+            observation = `${typeLabel}: ${holiday.name}`
+            console.log(`   🎉 Feriado: ${observation}`)
+          }
+          // Verificar se não é dia de trabalho (fim de semana ou dia não trabalhado)
+          else if (!isWorkday) {
+            observation = 'NÃO É DIA DE TRABALHO'
+            status = 'non_workday'
+            console.log(`   📅 Não é dia de trabalho (dia da semana: ${dayOfWeek})`)
+          }
         }
 
         return {
@@ -512,6 +593,24 @@ export default function Reports() {
         } else if (record.observation === 'EM FÉRIAS') {
           obs = 'EM FÉRIAS'
           status = 'vacation'
+        } else if (record.observation === 'NÃO É DIA DE TRABALHO') {
+          obs = 'NÃO É DIA DE TRABALHO'
+          status = 'holiday'
+        } else if (record.observation && record.observation.startsWith('FOLGA')) {
+          obs = record.observation
+          status = 'vacation'
+        } else if (record.observation && record.observation.startsWith('ATESTADO')) {
+          obs = record.observation
+          status = 'vacation'
+        } else if (record.observation && record.observation.startsWith('LICENÇA')) {
+          obs = record.observation
+          status = 'vacation'
+        } else if (record.observation && record.observation.startsWith('FALTA JUSTIFICADA')) {
+          obs = record.observation
+          status = 'vacation'
+        } else if (record.observation && record.observation.startsWith('AUSÊNCIA JUSTIFICADA')) {
+          obs = record.observation
+          status = 'vacation'
         } else if (record.observation) {
           obs = record.observation
         } else {
@@ -600,7 +699,14 @@ export default function Reports() {
 
     const totalPresent = attendanceData.filter((r) => r.entry_time || r.check_in).length
     const totalVacation = attendanceData.filter((r) => r.observation === 'EM FÉRIAS').length
-    const totalAbsent = attendanceData.filter((r) => !r.entry_time && !r.check_in && r.observation !== 'EM FÉRIAS').length
+    const totalAbsent = attendanceData.filter((r) => 
+      !r.entry_time && 
+      !r.check_in && 
+      r.observation !== 'EM FÉRIAS' && 
+      r.observation !== 'NÃO É DIA DE TRABALHO' &&
+      !r.observation?.includes('Feriado') &&
+      !r.observation?.includes('Ponto Facultativo')
+    ).length
     const totalDays = attendanceData.length
     const attendanceRate = ((totalPresent / totalDays) * 100).toFixed(1)
     

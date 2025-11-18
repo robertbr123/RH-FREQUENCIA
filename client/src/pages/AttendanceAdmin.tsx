@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { Clock, Edit2, Save, X, UserCheck } from 'lucide-react'
+import { Clock, Edit2, Save, X, UserCheck, Plus, CalendarOff } from 'lucide-react'
+import AbsenceModal from '../components/AbsenceModal'
 
 interface Employee {
   id: number
@@ -24,14 +25,28 @@ interface PunchEdit {
   time: string
 }
 
+interface Absence {
+  id: number
+  employee_id: number
+  start_date: string
+  end_date: string
+  absence_type: string
+  observation?: string
+  created_at: string
+}
+
 export default function AttendanceAdmin() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [selectedEmployee, setSelectedEmployee] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [punches, setPunches] = useState<Punch[]>([])
+  const [absences, setAbsences] = useState<Absence[]>([])
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [editValues, setEditValues] = useState<PunchEdit>({ punch_type: '', time: '' })
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [newPunch, setNewPunch] = useState<PunchEdit>({ punch_type: 'entry', time: '' })
+  const [showAbsenceModal, setShowAbsenceModal] = useState(false)
 
   const punchTypeLabels: Record<string, string> = {
     entry: 'Entrada',
@@ -54,6 +69,7 @@ export default function AttendanceAdmin() {
   useEffect(() => {
     if (selectedEmployee && selectedDate) {
       loadPunches()
+      loadAbsences()
     }
   }, [selectedEmployee, selectedDate])
 
@@ -88,6 +104,37 @@ export default function AttendanceAdmin() {
       setPunches([])
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadAbsences = async () => {
+    if (!selectedEmployee) return
+
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get(`/api/absences/employee/${selectedEmployee}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setAbsences(response.data || [])
+    } catch (error) {
+      console.error('Erro ao carregar ausências:', error)
+      setAbsences([])
+    }
+  }
+
+  const handleDeleteAbsence = async (absenceId: number) => {
+    if (!confirm('Tem certeza que deseja excluir esta ausência?')) return
+
+    try {
+      const token = localStorage.getItem('token')
+      await axios.delete(`/api/absences/${absenceId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      loadAbsences()
+      alert('Ausência excluída com sucesso!')
+    } catch (error) {
+      console.error('Erro ao excluir ausência:', error)
+      alert('Erro ao excluir ausência')
     }
   }
 
@@ -157,6 +204,33 @@ export default function AttendanceAdmin() {
   const handleCancel = () => {
     setEditing(null)
     setEditValues({ punch_type: '', time: '' })
+  }
+
+  const handleAddPunch = async () => {
+    if (!selectedEmployee || !selectedDate || !newPunch.time) {
+      alert('Preencha todos os campos')
+      return
+    }
+
+    try {
+      const token = localStorage.getItem('token')
+      await axios.post('/api/attendance/punches', {
+        employee_id: selectedEmployee,
+        date: selectedDate,
+        punch_type: newPunch.punch_type,
+        time: newPunch.time
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      setShowAddModal(false)
+      setNewPunch({ punch_type: 'entry', time: '' })
+      loadPunches()
+      alert('Ponto adicionado com sucesso!')
+    } catch (error: any) {
+      console.error('Erro ao adicionar ponto:', error)
+      alert(error.response?.data?.error || 'Erro ao adicionar ponto')
+    }
   }
 
   const employee = employees.find(e => e.id === selectedEmployee)
@@ -238,7 +312,23 @@ export default function AttendanceAdmin() {
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">
               Registros do Dia {selectedDate.split('-').reverse().join('/')}
             </h2>
-            {loading && <span className="text-gray-500 dark:text-gray-400">Carregando...</span>}
+            <div className="flex items-center gap-3">
+              {loading && <span className="text-gray-500 dark:text-gray-400">Carregando...</span>}
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-lg hover:from-green-700 hover:to-green-800 shadow-lg hover:shadow-xl transition-all duration-200"
+              >
+                <Plus className="w-5 h-5" />
+                Adicionar Ponto
+              </button>
+              <button
+                onClick={() => setShowAbsenceModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-600 to-orange-700 text-white rounded-lg hover:from-orange-700 hover:to-orange-800 shadow-lg hover:shadow-xl transition-all duration-200"
+              >
+                <CalendarOff className="w-5 h-5" />
+                Adicionar Falta/Atestado
+              </button>
+            </div>
           </div>
 
           {punches.length === 0 && !loading && (
@@ -355,6 +445,134 @@ export default function AttendanceAdmin() {
         </div>
       )}
 
+      {/* Modal para Adicionar Ponto */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
+              Adicionar Ponto Manual
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Tipo de Ponto
+                </label>
+                <select
+                  value={newPunch.punch_type}
+                  onChange={(e) => setNewPunch({ ...newPunch, punch_type: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="entry">Entrada</option>
+                  <option value="break_start">Início do Intervalo</option>
+                  <option value="break_end">Fim do Intervalo</option>
+                  <option value="exit">Saída</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Horário
+                </label>
+                <input
+                  type="time"
+                  value={newPunch.time}
+                  onChange={(e) => setNewPunch({ ...newPunch, time: e.target.value })}
+                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                  ⚠️ Este ponto será adicionado para <strong>{employee?.name}</strong> na data <strong>{selectedDate.split('-').reverse().join('/')}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={handleAddPunch}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold"
+              >
+                <Plus className="w-5 h-5" />
+                Adicionar
+              </button>
+              <button
+                onClick={() => {
+                  setShowAddModal(false)
+                  setNewPunch({ punch_type: 'entry', time: '' })
+                }}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-semibold"
+              >
+                <X className="w-5 h-5" />
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lista de Ausências */}
+      {selectedEmployee && absences.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
+            Ausências Registradas
+          </h2>
+          <div className="space-y-3">
+            {absences.map((absence) => {
+              const absenceTypeLabels: Record<string, string> = {
+                'folga': 'Folga',
+                'atestado': 'Atestado Médico',
+                'licenca': 'Licença',
+                'falta_justificada': 'Falta Justificada',
+                'outros': 'Outros'
+              }
+              const typeLabel = absenceTypeLabels[absence.absence_type] || absence.absence_type
+              const startDate = absence.start_date.split('T')[0]
+              const endDate = absence.end_date.split('T')[0]
+              const formatDate = (dateStr: string) => {
+                const [y, m, d] = dateStr.split('-')
+                return `${d}/${m}/${y}`
+              }
+
+              return (
+                <div
+                  key={absence.id}
+                  className="border-2 border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 rounded-lg p-4"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <CalendarOff className="w-5 h-5 text-orange-600" />
+                        <span className="font-semibold text-orange-900 dark:text-orange-200">
+                          {typeLabel}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">
+                        <strong>Período:</strong> {formatDate(startDate)} até {formatDate(endDate)}
+                      </p>
+                      {absence.observation && (
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                          <strong>Observação:</strong> {absence.observation}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteAbsence(absence.id)}
+                      className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                      title="Excluir ausência"
+                    >
+                      <X className="w-4 h-4" />
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Instruções */}
       <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4">
         <h3 className="font-semibold text-yellow-900 mb-2">⚠️ Atenção</h3>
@@ -362,8 +580,21 @@ export default function AttendanceAdmin() {
           <li>Edições e exclusões são permanentes e afetam os relatórios</li>
           <li>Sempre verifique o tipo de ponto antes de salvar</li>
           <li>Horários fora da tolerância serão marcados como atrasado/adiantado</li>
+          <li><strong>Novo:</strong> Use o botão "Adicionar Ponto" para registrar pontos esquecidos</li>
         </ul>
       </div>
+
+      {/* Modal de Ausência */}
+      {showAbsenceModal && (
+        <AbsenceModal
+          employeeId={selectedEmployee}
+          onClose={() => setShowAbsenceModal(false)}
+          onSave={() => {
+            setShowAbsenceModal(false)
+            loadAbsences()
+          }}
+        />
+      )}
     </div>
   )
 }
