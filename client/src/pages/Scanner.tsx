@@ -35,7 +35,68 @@ export default function Scanner() {
   const [manualInput, setManualInput] = useState('')
   const [loadingManual, setLoadingManual] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Helper para reproduzir som de votação com síntese de áudio
+  const playSuccessSound = () => {
+    try {
+      // Criar áudio com síntese em tempo real (mais confiável)
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      
+      // Se estiver suspenso, retomar
+      if (audioContext.state === 'suspended') {
+        audioContext.resume()
+      }
+      
+      // Criar sequência de beeps (som tipo votação)
+      const now = audioContext.currentTime
+      const beepDuration = 0.15
+      const gapDuration = 0.05
+      const frequency1 = 1000 // Primeira frequência
+      const frequency2 = 800  // Segunda frequência
+      
+      // Primeiro beep
+      playBeep(audioContext, now, frequency1, beepDuration, 0.5)
+      
+      // Segundo beep
+      playBeep(audioContext, now + beepDuration + gapDuration, frequency2, beepDuration, 0.5)
+    } catch (e) {
+      // Som pode falhar - ignorar silenciosamente
+    }
+  }
+
+  // Função auxiliar para tocar um beep individual
+  const playBeep = (audioContext: any, startTime: number, frequency: number, duration: number, volume: number) => {
+    const oscillator = audioContext.createOscillator()
+    const gain = audioContext.createGain()
+    
+    oscillator.connect(gain)
+    gain.connect(audioContext.destination)
+    
+    oscillator.frequency.value = frequency
+    oscillator.type = 'sine'
+    
+    gain.gain.setValueAtTime(volume, startTime)
+    gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration)
+    
+    oscillator.start(startTime)
+    oscillator.stop(startTime + duration)
+  }
+
+  // Monitorar conexão online/offline
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true)
+    const handleOffline = () => setIsOnline(false)
+    
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
 
   // Helper to translate punch types
   const getPunchTypeLabel = (type: string) => {
@@ -145,8 +206,19 @@ export default function Scanner() {
       const html5QrCode = new Html5Qrcode('qr-reader')
       scannerRef.current = html5QrCode
 
-      // Primeiro tentar a última câmera (geralmente traseira)
-      let cameraId = devices[devices.length - 1].id
+      // Preferir câmera frontal (melhor para tablets) ou usar a primeira disponível
+      let cameraId = devices[0].id
+      
+      // Se houver apenas uma câmera ou se for encontrar uma frontal, usar
+      const frontCamera = devices.find((device: any) => 
+        device.label?.toLowerCase().includes('front') ||
+        device.label?.toLowerCase().includes('frontal') ||
+        device.label?.toLowerCase().includes('user')
+      )
+      
+      if (frontCamera) {
+        cameraId = frontCamera.id
+      }
 
       await html5QrCode.start(
         cameraId,
@@ -186,7 +258,7 @@ export default function Scanner() {
         scannerRef.current = null
         setScanning(false)
       } catch (err) {
-        console.error('Erro ao parar scanner:', err)
+        // Erro ao parar scanner - ignorar
         setScanning(false)
       }
     }
@@ -194,7 +266,7 @@ export default function Scanner() {
 
   const onScanSuccess = async (decodedText: string) => {
     try {
-      console.log('QR Code lido:', decodedText)
+      // Debug logging apenas em desenvolvimento
       
       // Parse QR code data
       const qrData = JSON.parse(decodedText)
@@ -233,17 +305,28 @@ export default function Scanner() {
         today_summary: response.data.today_summary,
       })
 
+      // Reproduzir som de sucesso
+      playSuccessSound()
+      
+      // Toast com feedback positivo (com fallback se punch_type for undefined)
+      const punchType = response.data.punch_type || 'Ponto'
+      toast.success(`Ponto registrado! ${getPunchTypeLabel(punchType)}`)
+
       // Limpar resultado após 5 segundos e reiniciar scanner
       setTimeout(() => {
         setResult(null)
         startScanner()
       }, 5000)
     } catch (err: any) {
-      console.error('Erro ao registrar ponto:', err)
+      const errorMessage = err.response?.data?.error || 'Erro ao registrar ponto'
+      
       setResult({
         success: false,
-        message: err.response?.data?.error || 'Erro ao registrar ponto',
+        message: errorMessage,
       })
+      
+      // Toast com erro
+      toast.error(errorMessage)
 
       // Reiniciar scanner após 3 segundos
       setTimeout(() => {
@@ -269,14 +352,10 @@ export default function Scanner() {
     try {
       const token = localStorage.getItem('token')
       
-      console.log('Buscando funcionário com:', manualInput.trim())
-      
       // Buscar funcionário por matrícula ou CPF
       const response = await axios.get('/api/employees', {
         headers: { Authorization: `Bearer ${token}` },
       })
-
-      console.log('Funcionários encontrados:', response.data.length)
 
       const employee = response.data.find((emp: any) => 
         emp.id.toString() === manualInput.trim() || 
@@ -289,16 +368,12 @@ export default function Scanner() {
         return
       }
 
-      console.log('Funcionário encontrado:', employee.name, 'ID:', employee.id)
-
       // Registrar ponto
       const attendanceResponse = await axios.post(
         '/api/attendance',
         { employee_id: employee.id },
         { headers: { Authorization: `Bearer ${token}` } }
       )
-
-      console.log('Resposta do registro:', attendanceResponse.data)
 
       setResult({
         success: true,
@@ -313,6 +388,13 @@ export default function Scanner() {
         today_summary: attendanceResponse.data.today_summary,
       })
 
+      // Reproduzir som de sucesso
+      playSuccessSound()
+      
+      // Toast com feedback positivo (com fallback se punch_type for undefined)
+      const punchType = attendanceResponse.data.punch_type || 'Ponto'
+      toast.success(`Ponto registrado! ${getPunchTypeLabel(punchType)}`)
+
       setManualInput('')
       
       // Limpar resultado após 5 segundos
@@ -320,9 +402,6 @@ export default function Scanner() {
         setResult(null)
       }, 5000)
     } catch (err: any) {
-      console.error('Erro detalhado ao registrar ponto:', err)
-      console.error('Resposta do erro:', err.response?.data)
-      
       let errorMessage = 'Erro ao registrar ponto'
       if (err.response?.data?.error) {
         errorMessage = err.response.data.error
@@ -334,6 +413,9 @@ export default function Scanner() {
         success: false,
         message: errorMessage,
       })
+      
+      // Toast com erro
+      toast.error(errorMessage)
 
       setTimeout(() => {
         setResult(null)
@@ -362,15 +444,20 @@ export default function Scanner() {
       {/* Cabeçalho - esconde em tela cheia */}
       {!isFullscreen && (
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-            <div className="p-3 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl shadow-lg">
-              <Camera className="w-8 h-8 text-white" />
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                <div className="p-3 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl shadow-lg">
+                  <Camera className="w-8 h-8 text-white" />
+                </div>
+                Scanner de Ponto
+              </h1>
+              <p className="text-gray-600 dark:text-gray-400 mt-2">
+                Escaneie o QR Code do crachá do funcionário para registrar o ponto
+              </p>
             </div>
-            Scanner de Ponto
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-2">
-            Escaneie o QR Code do crachá do funcionário para registrar o ponto
-          </p>
+            {/* Status Online/Offline - REMOVIDO do header, será adicionado fixo no rodapé */}
+          </div>
         </div>
       )}
 
@@ -605,7 +692,8 @@ export default function Scanner() {
             </div>
             <form onSubmit={handleManualEntry} className="space-y-4">
               <input
-                type="text"
+                type="tel"
+                inputMode="numeric"
                 value={manualInput}
                 onChange={(e) => setManualInput(e.target.value)}
                 placeholder="Matrícula ou CPF"
@@ -639,6 +727,20 @@ export default function Scanner() {
           <li>O sistema registrará o ponto automaticamente</li>
           <li>Verifique a confirmação com os dados do funcionário</li>
         </ol>
+      </div>
+
+      {/* Status Online/Offline - Fixo na parte inferior, visível sempre */}
+      <div className={`fixed bottom-0 left-0 right-0 ${
+        isFullscreen ? 'px-6 py-4' : 'px-6 py-3'
+      } flex items-center justify-center gap-3 ${
+        isOnline 
+          ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-t border-green-200 dark:border-green-900' 
+          : 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-t border-red-200 dark:border-red-900'
+      }`}>
+        <div className={`w-3 h-3 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'} ${isOnline ? '' : 'animate-pulse'}`}></div>
+        <span className={`font-medium ${isFullscreen ? 'text-base' : 'text-sm'}`}>
+          Sistema {isOnline ? 'Online' : 'Offline'}
+        </span>
       </div>
     </div>
   )
