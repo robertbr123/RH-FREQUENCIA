@@ -17,7 +17,7 @@ const isAdmin = (req, res, next) => {
 router.get('/', authenticateToken, isAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, name, email, role, status, created_at FROM users ORDER BY name ASC'
+      `SELECT id, username, name, email, role, department_id, status, created_at FROM users ORDER BY name ASC`
     );
     res.json(result.rows);
   } catch (error) {
@@ -35,7 +35,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
     }
 
     const result = await pool.query(
-      'SELECT id, username, name, email, role, status, created_at FROM users WHERE id = $1',
+      'SELECT id, username, name, email, role, department_id, status, created_at FROM users WHERE id = $1',
       [req.params.id]
     );
 
@@ -52,7 +52,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 // Criar novo usuário (apenas admin)
 router.post('/', authenticateToken, isAdmin, async (req, res) => {
-  const { username, password, name, email, role } = req.body;
+  const { username, password, name, email, role, department_id } = req.body;
 
   try {
     // Validar campos obrigatórios
@@ -68,13 +68,31 @@ router.post('/', authenticateToken, isAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Nível de acesso inválido' });
     }
 
+    // Se é gestor, department_id é obrigatório
+    if (role === 'gestor' && !department_id) {
+      return res.status(400).json({ 
+        error: 'Departamento é obrigatório para gestores' 
+      });
+    }
+
+    // Validar se departamento existe (quando informado)
+    if (department_id) {
+      const deptCheck = await pool.query(
+        'SELECT id FROM departments WHERE id = $1',
+        [department_id]
+      );
+      if (deptCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Departamento não encontrado' });
+      }
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     
     const result = await pool.query(
-      `INSERT INTO users (username, password, name, email, role, status) 
-       VALUES ($1, $2, $3, $4, $5, 'active') 
-       RETURNING id, username, name, email, role, status, created_at`,
-      [username, hashedPassword, name, email || null, role]
+      `INSERT INTO users (username, password, name, email, role, department_id, status) 
+       VALUES ($1, $2, $3, $4, $5, $6, 'active') 
+       RETURNING id, username, name, email, role, department_id, status, created_at`,
+      [username, hashedPassword, name, email || null, role, department_id || null]
     );
 
     res.status(201).json(result.rows[0]);
@@ -89,7 +107,7 @@ router.post('/', authenticateToken, isAdmin, async (req, res) => {
 
 // Atualizar usuário (admin pode atualizar todos, usuário pode atualizar apenas seu perfil)
 router.put('/:id', authenticateToken, async (req, res) => {
-  const { name, email, role, status } = req.body;
+  const { name, email, role, status, department_id } = req.body;
   const userId = parseInt(req.params.id);
 
   try {
@@ -101,20 +119,37 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    // Apenas admin pode alterar role e status
+    // Se é gestor, validar department_id
+    if (role === 'gestor' && !department_id) {
+      return res.status(400).json({ 
+        error: 'Departamento é obrigatório para gestores' 
+      });
+    }
+
+    if (department_id) {
+      const deptCheck = await pool.query(
+        'SELECT id FROM departments WHERE id = $1',
+        [department_id]
+      );
+      if (deptCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Departamento não encontrado' });
+      }
+    }
+
+    // Apenas admin pode alterar role, status e department
     let query, params;
     if (isAdminUser) {
       query = `UPDATE users 
-               SET name = $1, email = $2, role = $3, status = $4 
-               WHERE id = $5 
-               RETURNING id, username, name, email, role, status, created_at`;
-      params = [name, email, role, status, userId];
+               SET name = $1, email = $2, role = $3, status = $4, department_id = $5 
+               WHERE id = $6 
+               RETURNING id, username, name, email, role, department_id, status, created_at`;
+      params = [name, email, role, status, department_id || null, userId];
     } else {
       // Usuário comum só pode alterar nome e email
       query = `UPDATE users 
                SET name = $1, email = $2 
                WHERE id = $3 
-               RETURNING id, username, name, email, role, status, created_at`;
+               RETURNING id, username, name, email, role, department_id, status, created_at`;
       params = [name, email, userId];
     }
 
@@ -231,7 +266,7 @@ router.patch('/:id/status', authenticateToken, isAdmin, async (req, res) => {
 router.get('/me/profile', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, name, email, role, status, created_at FROM users WHERE id = $1',
+      'SELECT id, username, name, email, role, department_id, status, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
 

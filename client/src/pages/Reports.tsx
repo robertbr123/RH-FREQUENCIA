@@ -146,8 +146,23 @@ export default function Reports() {
 
       // Obter horário de trabalho do funcionário
       const employeeData = employeeResponse.data
-      const workdays = employeeData.workdays || []
-      console.log('📅 Dias de trabalho do funcionário:', workdays)
+      
+      // Buscar schedule_id do funcionário e depois os workdays
+      let workdays: any[] = []
+      if (employeeData.schedule_id) {
+        try {
+          const scheduleResponse = await axios.get(`/api/organization/schedules/${employeeData.schedule_id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          workdays = scheduleResponse.data.workdays || []
+          console.log('📅 Dias de trabalho da escala:', scheduleResponse.data.name, '→', workdays)
+        } catch (error) {
+          console.warn('⚠️ Não foi possível buscar escala do funcionário:', error)
+          workdays = []
+        }
+      } else {
+        console.warn('⚠️ Funcionário sem schedule_id atribuído')
+      }
 
       // Armazenar feriados, férias e ausências
       setHolidays(holidaysResponse.data)
@@ -256,34 +271,41 @@ export default function Reports() {
       console.log('🗺️  Mapa de attendance criado:', Array.from(attendanceMap.keys()))
       console.log('🗺️  Total de datas no mapa:', attendanceMap.size)
 
-      // Mapear dias da semana para índices (0 = domingo, 1 = segunda, ..., 6 = sábado)
-      const dayOfWeekMap: Record<string, number> = {
-        'domingo': 0,
-        'segunda': 1,
-        'terça': 2,
-        'quarta': 3,
-        'quinta': 4,
-        'sexta': 5,
-        'sábado': 6
-      }
+      // Mapear dias da semana para índices
+      // workdays vem como ["0","1","2","3","4","5","6"] ou ["1","2","3","4","5"]
+      // Onde: 0=domingo, 1=segunda, 2=terça, 3=quarta, 4=quinta, 5=sexta, 6=sábado
+      
+      // Converter array de strings para números para o set
+      const workdayNumbers = workdays
+        .map((day: any) => {
+          // Se for string, converter para número
+          if (typeof day === 'string') {
+            return parseInt(day)
+          }
+          return day
+        })
+        .filter((d: number) => !isNaN(d))
       
       // Criar set com os dias de trabalho do funcionário
-      const workdaySet = new Set(
-        workdays.map((day: string) => dayOfWeekMap[day.toLowerCase()] ?? -1).filter((d: number) => d !== -1)
-      )
-      console.log('📅 Set de dias de trabalho (0-6):', Array.from(workdaySet))
+      const workdaySet = new Set(workdayNumbers)
+      console.log('📅 Dias de trabalho (0-6, onde 0=dom, 6=sab):', Array.from(workdaySet))
 
       const fullMonthData = daysInMonth.map((day) => {
         const dateStr = format(day, 'yyyy-MM-dd')
         const dayOfWeek = day.getDay() // 0 = domingo, 6 = sábado
-        const isWorkday = workdaySet.size === 0 || workdaySet.has(dayOfWeek) // Se não tem horário definido, considera todos os dias
+        
+        // Verificar se é dia de trabalho para este funcionário
+        // Se workdaySet está vazio, considera todos os dias como dia de trabalho
+        const isWorkday = workdaySet.size === 0 || workdaySet.has(dayOfWeek)
+        
         const record = attendanceMap.get(dateStr)
         const holiday = holidayMap.get(dateStr)
         const onVacation = isOnVacation(dateStr)
 
         if (record) {
-          console.log(`\n🔍 Dia ${dateStr}:`)
+          console.log(`\n🔍 Dia ${dateStr} (dia da semana: ${dayOfWeek}):`)
           console.log('   📝 Registro encontrado:', record)
+          console.log('   📅 É dia de trabalho?', isWorkday)
         }
 
         // Determinar status correto
@@ -302,6 +324,7 @@ export default function Reports() {
         // Verificar se está em férias
         if (onVacation) {
           observation = 'EM FÉRIAS'
+          status = 'vacation'
           console.log(`   🏖️ Funcionário em férias`)
         }
         // Verificar se está em ausência justificada (folga, atestado, etc)
@@ -319,6 +342,7 @@ export default function Reports() {
             observation = absenceInfo.observation 
               ? `${typeLabel}: ${absenceInfo.observation}` 
               : typeLabel
+            status = 'justified_absence'
             console.log(`   🚫 Ausência: ${observation}`)
           }
           // Verificar se é feriado (apenas se não estiver em férias ou ausência)
@@ -330,13 +354,16 @@ export default function Reports() {
               'Ponto Facultativo'
             
             observation = `${typeLabel}: ${holiday.name}`
+            status = 'holiday'
             console.log(`   🎉 Feriado: ${observation}`)
           }
           // Verificar se não é dia de trabalho (fim de semana ou dia não trabalhado)
           else if (!isWorkday) {
-            observation = 'NÃO É DIA DE TRABALHO'
+            // Dia da semana que o funcionário não trabalha normalmente
+            const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+            observation = `NÃO TRABALHA ${dayNames[dayOfWeek].toUpperCase()}`
             status = 'non_workday'
-            console.log(`   📅 Não é dia de trabalho (dia da semana: ${dayOfWeek})`)
+            console.log(`   📅 Não é dia de trabalho para este funcionário (${dayNames[dayOfWeek]})`)
           }
         }
 
@@ -635,6 +662,43 @@ export default function Reports() {
     // Filtrar registros nulos antes de criar a tabela
     const validTableData = tableData.filter(row => row !== null)
 
+    // ===== LEGENDA DE CORES =====
+    yPos += 8
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(...darkGray)
+    doc.text('LEGENDA DE OBSERVAÇÕES:', 15, yPos)
+    
+    yPos += 7
+    doc.setFontSize(7)
+    
+    const legend = [
+      { color: [34, 197, 94], label: 'Presente - Dia trabalhado normalmente' },
+      { color: [220, 38, 38], label: 'Falta - Deveria trabalhar, não compareceu' },
+      { color: [59, 130, 246], label: 'Em Férias - Período de férias' },
+      { color: [147, 51, 234], label: 'Feriado - Feriado nacional/estadual/municipal' },
+      { color: [107, 114, 128], label: 'Não Trabalha - Dia de folga per escala' },
+      { color: [180, 83, 9], label: 'Ausência Justificada - Atestado/Licença/Folga' },
+    ]
+    
+    const colWidth = 95
+    legend.forEach((item, index) => {
+      const col = index % 2
+      const row = Math.floor(index / 2)
+      const x = 15 + (col * colWidth)
+      const legendY = yPos + (row * 6)
+      
+      // Quadrado colorido
+      doc.setFillColor(...item.color)
+      doc.rect(x, legendY - 2, 3, 3, 'F')
+      
+      // Texto
+      doc.setTextColor(0, 0, 0)
+      doc.text(item.label, x + 5, legendY)
+    })
+    
+    yPos += 20
+
     autoTable(doc, {
       startY: yPos,
       head: [['Dia', 'Dia da Semana', 'Entrada', 'Saída', 'Total', 'Observações']],
@@ -678,11 +742,20 @@ export default function Reports() {
         if (data.section === 'body' && data.column.index === 5) {
           const cellText = data.cell.text[0]
           
-          if (rowStatus === 'holiday' || cellText?.startsWith('FERIADO')) {
+          if (rowStatus === 'present' || cellText?.includes('Entrada') || cellText?.includes(':')) {
             data.cell.styles.textColor = [34, 197, 94] // verde
+            data.cell.styles.fontStyle = 'bold'
+          } else if (rowStatus === 'holiday' || cellText?.startsWith('FERIADO')) {
+            data.cell.styles.textColor = [147, 51, 234] // roxo
             data.cell.styles.fontStyle = 'bold'
           } else if (rowStatus === 'vacation' || cellText === 'EM FÉRIAS') {
             data.cell.styles.textColor = [59, 130, 246] // azul
+            data.cell.styles.fontStyle = 'bold'
+          } else if (rowStatus === 'non_workday' || cellText?.startsWith('NÃO TRABALHA')) {
+            data.cell.styles.textColor = [107, 114, 128] // cinza
+            data.cell.styles.fontStyle = 'bold'
+          } else if (rowStatus === 'justified_absence') {
+            data.cell.styles.textColor = [180, 83, 9] // laranja
             data.cell.styles.fontStyle = 'bold'
           } else if (rowStatus === 'absent' || cellText === 'FALTA') {
             data.cell.styles.textColor = [220, 38, 38] // vermelho
@@ -697,16 +770,12 @@ export default function Reports() {
     const finalY = (doc as any).lastAutoTable.finalY || yPos
     yPos = finalY + 8
 
-    const totalPresent = attendanceData.filter((r) => r.entry_time || r.check_in).length
-    const totalVacation = attendanceData.filter((r) => r.observation === 'EM FÉRIAS').length
-    const totalAbsent = attendanceData.filter((r) => 
-      !r.entry_time && 
-      !r.check_in && 
-      r.observation !== 'EM FÉRIAS' && 
-      r.observation !== 'NÃO É DIA DE TRABALHO' &&
-      !r.observation?.includes('Feriado') &&
-      !r.observation?.includes('Ponto Facultativo')
-    ).length
+    const totalPresent = attendanceData.filter((r) => r.status === 'present').length
+    const totalVacation = attendanceData.filter((r) => r.status === 'vacation').length
+    const totalAbsent = attendanceData.filter((r) => r.status === 'absent').length
+    const totalNonWorkday = attendanceData.filter((r) => r.status === 'non_workday').length
+    const totalHoliday = attendanceData.filter((r) => r.status === 'holiday').length
+    const totalJustified = attendanceData.filter((r) => r.status === 'justified_absence').length
     const totalDays = attendanceData.length
     const attendanceRate = ((totalPresent / totalDays) * 100).toFixed(1)
     
@@ -741,6 +810,9 @@ export default function Reports() {
       { label: 'Dias Presentes:', value: totalPresent.toString(), color: [34, 197, 94] },
       { label: 'Dias em Férias:', value: totalVacation.toString(), color: [59, 130, 246] },
       { label: 'Faltas:', value: totalAbsent.toString(), color: [220, 38, 38] },
+      { label: 'Não Trabalha:', value: totalNonWorkday.toString(), color: [107, 114, 128] },
+      { label: 'Feriados:', value: totalHoliday.toString(), color: [147, 51, 234] },
+      { label: 'Ausências Just.:', value: totalJustified.toString(), color: [180, 83, 9] },
       { label: 'Taxa de Presença:', value: `${attendanceRate}%`, color: [59, 130, 246] },
       { label: 'Horas Trabalhadas:', value: `${Math.floor(totalHours)}h ${Math.floor((totalHours % 1) * 60)}m` },
       { label: 'Média por Dia:', value: `${Math.floor(avgHoursPerDay)}h ${Math.floor((avgHoursPerDay % 1) * 60)}m` },
@@ -1225,6 +1297,9 @@ export default function Reports() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Status
                     </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                      Observações
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -1272,13 +1347,34 @@ export default function Reports() {
                         <td className="px-4 py-3 text-sm">
                           <span
                             className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              record.check_in
+                              record.status === 'present'
                                 ? 'bg-green-100 text-green-800'
+                                : record.status === 'vacation'
+                                ? 'bg-blue-100 text-blue-800'
+                                : record.status === 'holiday'
+                                ? 'bg-purple-100 text-purple-800'
+                                : record.status === 'non_workday'
+                                ? 'bg-gray-100 text-gray-700'
+                                : record.status === 'justified_absence'
+                                ? 'bg-yellow-100 text-yellow-800'
                                 : 'bg-red-100 text-red-800'
                             }`}
                           >
-                            {record.check_in ? 'Presente' : 'Ausente'}
+                            {record.status === 'present'
+                              ? 'Presente'
+                              : record.status === 'vacation'
+                              ? 'Em Férias'
+                              : record.status === 'holiday'
+                              ? 'Feriado'
+                              : record.status === 'non_workday'
+                              ? 'Não Trabalha'
+                              : record.status === 'justified_absence'
+                              ? 'Ausência Justificada'
+                              : 'Ausente'}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
+                          {record.observation || '-'}
                         </td>
                       </tr>
                     )
@@ -1293,19 +1389,39 @@ export default function Reports() {
                 <div>
                   <span className="text-gray-600 dark:text-gray-400">Total de Dias Presentes:</span>
                   <span className="ml-2 font-semibold text-green-600">
-                    {attendanceData.filter((r) => r.check_in).length}
+                    {attendanceData.filter((r) => r.status === 'present').length}
                   </span>
                 </div>
                 <div>
                   <span className="text-gray-600 dark:text-gray-400">Dias em Férias:</span>
                   <span className="ml-2 font-semibold text-blue-600">
-                    {attendanceData.filter((r) => r.observation === 'EM FÉRIAS').length}
+                    {attendanceData.filter((r) => r.status === 'vacation').length}
                   </span>
                 </div>
                 <div>
                   <span className="text-gray-600 dark:text-gray-400">Total de Faltas:</span>
                   <span className="ml-2 font-semibold text-red-600">
-                    {attendanceData.filter((r) => !r.check_in && r.observation !== 'EM FÉRIAS').length}
+                    {attendanceData.filter((r) => r.status === 'absent').length}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4 text-sm mt-3">
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Não Trabalha:</span>
+                  <span className="ml-2 font-semibold text-gray-600">
+                    {attendanceData.filter((r) => r.status === 'non_workday').length}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Feriados:</span>
+                  <span className="ml-2 font-semibold text-purple-600">
+                    {attendanceData.filter((r) => r.status === 'holiday').length}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600 dark:text-gray-400">Ausências Justificadas:</span>
+                  <span className="ml-2 font-semibold text-yellow-600">
+                    {attendanceData.filter((r) => r.status === 'justified_absence').length}
                   </span>
                 </div>
               </div>

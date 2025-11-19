@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { checkDepartmentAccess, hasAccessToEmployee } from '../middleware/departmentAccess.js';
 
 const router = express.Router();
 
@@ -312,7 +313,7 @@ router.post('/check-out', authenticateToken, async (req, res) => {
 });
 
 // Listar registros de frequência
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
   const { employee_id, start_date, end_date } = req.query;
   
   try {
@@ -370,6 +371,7 @@ router.get('/', authenticateToken, async (req, res) => {
         e.name as employee_name,
         p.name as position_name,
         d.name as department_name,
+        e.department_id,
         -- Calcular total de horas
         CASE 
           WHEN dp.break_start_timestamp IS NOT NULL AND dp.break_end_timestamp IS NOT NULL AND dp.exit_timestamp IS NOT NULL THEN
@@ -388,8 +390,16 @@ router.get('/', authenticateToken, async (req, res) => {
       JOIN employees e ON dp.employee_id = e.id
       LEFT JOIN positions p ON e.position_id = p.id
       LEFT JOIN departments d ON e.department_id = d.id
-      ORDER BY dp.date DESC
     `;
+
+    // Se é gestor, filtrar apenas seu departamento
+    if (req.user.role === 'gestor') {
+      query += ` WHERE e.department_id = $${paramCount}`;
+      params.push(req.userDepartmentId);
+      paramCount++;
+    }
+
+    query += ` ORDER BY dp.date DESC`;
 
     console.log('📝 Query SQL:', query);
     console.log('📌 Parâmetros:', params);

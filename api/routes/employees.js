@@ -1,11 +1,12 @@
 import express from 'express';
 import pool from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { checkDepartmentAccess, hasAccessToEmployee } from '../middleware/departmentAccess.js';
 
 const router = express.Router();
 
-// Listar todos os funcionários
-router.get('/', authenticateToken, async (req, res) => {
+// Listar todos os funcionários (gestores veem apenas seu departamento)
+router.get('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
   const { status } = req.query;
   
   try {
@@ -20,9 +21,20 @@ router.get('/', authenticateToken, async (req, res) => {
                  LEFT JOIN sectors s ON e.sector_id = s.id
                  LEFT JOIN units u ON e.unit_id = u.id`;
     const params = [];
+    let paramCount = 1;
 
-    if (status) {
-      query += ' WHERE e.status = $1';
+    // Se é gestor, filtrar por seu departamento
+    if (req.user.role === 'gestor') {
+      query += ` WHERE e.department_id = $${paramCount}`;
+      params.push(req.userDepartmentId);
+      paramCount++;
+
+      if (status) {
+        query += ` AND e.status = $${paramCount}`;
+        params.push(status);
+      }
+    } else if (status) {
+      query += ` WHERE e.status = $${paramCount}`;
       params.push(status);
     }
 
@@ -36,8 +48,8 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-// Buscar funcionário por ID
-router.get('/:id', authenticateToken, async (req, res) => {
+// Buscar funcionário por ID (com validação de departamento)
+router.get('/:id', authenticateToken, checkDepartmentAccess, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT e.*, 
@@ -58,7 +70,20 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Funcionário não encontrado' });
     }
 
-    res.json(result.rows[0]);
+    const employee = result.rows[0];
+
+    // Validar acesso (gestor só vê seu departamento)
+    const hasAccess = await hasAccessToEmployee(
+      employee.department_id,
+      req.user.role,
+      req.userDepartmentId
+    );
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Acesso negado a este funcionário' });
+    }
+
+    res.json(employee);
   } catch (error) {
     console.error('Erro ao buscar funcionário:', error);
     res.status(500).json({ error: 'Erro ao buscar funcionário' });
@@ -66,7 +91,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Criar novo funcionário
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
   const { 
     name, email, cpf, rg, birth_date, gender, marital_status,
     address, city, state, zip_code, phone, emergency_contact, emergency_phone,
@@ -75,6 +100,13 @@ router.post('/', authenticateToken, async (req, res) => {
   } = req.body;
 
   try {
+    // Validar acesso ao departamento
+    if (req.user.role === 'gestor' && department_id !== req.userDepartmentId) {
+      return res.status(403).json({ 
+        error: 'Você só pode criar funcionários no seu departamento' 
+      });
+    }
+
     const result = await pool.query(
       `INSERT INTO employees (
         name, email, cpf, rg, birth_date, gender, marital_status,
@@ -102,7 +134,7 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // Atualizar funcionário
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, checkDepartmentAccess, async (req, res) => {
   const { 
     name, email, cpf, rg, birth_date, gender, marital_status,
     address, city, state, zip_code, phone, emergency_contact, emergency_phone,
@@ -111,6 +143,30 @@ router.put('/:id', authenticateToken, async (req, res) => {
   } = req.body;
 
   try {
+    // Primeiro, verificar se funcionário existe e se tem acesso
+    const employeeCheck = await pool.query(
+      'SELECT department_id FROM employees WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (employeeCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    }
+
+    const employeeDepartmentId = employeeCheck.rows[0].department_id;
+
+    // Validar acesso (gestor não pode alterar departamento ou funcionários de outros departamentos)
+    if (req.user.role === 'gestor') {
+      if (employeeDepartmentId !== req.userDepartmentId) {
+        return res.status(403).json({ error: 'Acesso negado a este funcionário' });
+      }
+      if (department_id && department_id !== req.userDepartmentId) {
+        return res.status(403).json({ 
+          error: 'Você não pode mover funcionários para outro departamento' 
+        });
+      }
+    }
+
     const result = await pool.query(
       `UPDATE employees 
        SET name = $1, email = $2, cpf = $3, rg = $4, birth_date = $5, gender = $6, marital_status = $7,
@@ -145,8 +201,22 @@ router.put('/:id', authenticateToken, async (req, res) => {
 });
 
 // Deletar funcionário (soft delete)
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, checkDepartmentAccess, async (req, res) => {
   try {
+    // Verificar acesso
+    const employeeCheck = await pool.query(
+      'SELECT department_id FROM employees WHERE id = $1',
+      [req.params.id]
+    );
+
+    if (employeeCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    }
+
+    if (req.user.role === 'gestor' && employeeCheck.rows[0].department_id !== req.userDepartmentId) {
+      return res.status(403).json({ error: 'Acesso negado a este funcionário' });
+    }
+
     const result = await pool.query(
       'UPDATE employees SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id',
       ['inactive', req.params.id]

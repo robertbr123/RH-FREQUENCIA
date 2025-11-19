@@ -6,39 +6,31 @@ const router = express.Router();
 
 // Rate limiting simples (em memória)
 const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minuto
+const RATE_LIMIT_WINDOW = 60 * 1000;
 const MAX_REQUESTS = 5;
 
 const checkRateLimit = (ip) => {
   const now = Date.now();
   const userRequests = rateLimitMap.get(ip) || [];
-  
-  // Limpar requisições antigas
   const recentRequests = userRequests.filter(time => now - time < RATE_LIMIT_WINDOW);
   
   if (recentRequests.length >= MAX_REQUESTS) {
-    return false; // Excedeu o limite
+    return false;
   }
   
   recentRequests.push(now);
   rateLimitMap.set(ip, recentRequests);
-  return true; // Permitido
+  return true;
 };
 
 // Endpoint PÚBLICO - Consulta de frequência por CPF
 router.post('/check-attendance', async (req, res) => {
   const { cpf } = req.body;
-  // Pegar IP da requisição (Vercel passa no header x-forwarded-for)
-  const clientIp = req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress || 'unknown';
+  const clientIp = req.headers['x-forwarded-for'] || req.ip || 'unknown';
 
   try {
-    console.log('🔍 Tentativa de consulta de frequência');
-    console.log('   IP:', clientIp);
-    console.log('   CPF recebido:', cpf ? `${cpf.substring(0, 3)}***` : 'vazio');
-
     // Rate limiting
     if (!checkRateLimit(clientIp)) {
-      console.log('❌ Rate limit excedido para IP:', clientIp);
       return res.status(429).json({ 
         success: false,
         message: 'Muitas tentativas. Aguarde 1 minuto e tente novamente.' 
@@ -47,173 +39,123 @@ router.post('/check-attendance', async (req, res) => {
 
     // Validar CPF
     if (!cpf || cpf.length !== 11 || !/^\d{11}$/.test(cpf)) {
-      console.log('❌ CPF inválido:', cpf);
       return res.status(400).json({ 
         success: false,
         message: 'CPF inválido. Digite apenas os 11 dígitos.' 
       });
     }
 
-    console.log('✅ Validações passaram, buscando funcionário...');
-
     // Buscar funcionário por CPF
-    let employeeResult;
-    try {
-      // Buscar tanto com máscara quanto sem máscara
-      // Remove pontos, hífens e espaços do CPF para comparação
-      employeeResult = await pool.query(
-        `SELECT 
-          e.id,
-          e.name,
-          e.status,
-          e.photo_url,
-          p.name as position_name,
-          d.name as department_name,
-          LPAD(e.id::text, 6, '0') as matricula
-        FROM employees e
-        LEFT JOIN positions p ON e.position_id = p.id
-        LEFT JOIN departments d ON e.department_id = d.id
-        WHERE REPLACE(REPLACE(REPLACE(e.cpf, '.', ''), '-', ''), ' ', '') = $1`,
-        [cpf]
-      );
-      console.log('✅ Query de funcionário executada, resultados:', employeeResult.rows.length);
-    } catch (dbError) {
-      console.error('❌ Erro na query de funcionário:', dbError);
-      throw dbError;
-    }
+    const empResult = await pool.query(
+      `SELECT 
+        e.id, e.name, e.status, e.photo_url, e.schedule_id,
+        p.name as position_name, d.name as department_name,
+        LPAD(e.id::text, 6, '0') as matricula
+      FROM employees e
+      LEFT JOIN positions p ON e.position_id = p.id
+      LEFT JOIN departments d ON e.department_id = d.id
+      WHERE REPLACE(REPLACE(REPLACE(e.cpf, '.', ''), '-', ''), ' ', '') = $1`,
+      [cpf]
+    );
 
-    if (employeeResult.rows.length === 0) {
-      // Log da tentativa (segurança)
-      console.log(`❌ Tentativa de consulta com CPF não cadastrado: ${cpf.substring(0, 3)}***`);
+    if (empResult.rows.length === 0) {
       return res.status(404).json({ 
         success: false,
-        message: 'CPF não encontrado. Verifique se está cadastrado no sistema.' 
+        message: 'CPF não encontrado.'
       });
     }
 
-    const employee = employeeResult.rows[0];
-    console.log('✅ Funcionário encontrado:', employee.name);
+    const emp = empResult.rows[0];
 
-    // Verificar se funcionário está ativo
-    if (employee.status !== 'active') {
-      console.log(`⚠️ Tentativa de consulta de funcionário inativo: ${employee.name}`);
+    if (emp.status !== 'active') {
       return res.status(403).json({ 
         success: false,
-        message: 'Funcionário inativo. Contate o RH para mais informações.' 
+        message: 'Funcionário inativo.'
       });
     }
 
-    // Buscar frequência do mês atual
+    // Datas
     const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    
-    const startDate = firstDay.toISOString().split('T')[0];
-    const endDate = lastDay.toISOString().split('T')[0];
+    const startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
     const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-    console.log('📅 Buscando frequência em attendance_punches:', { employee_id: employee.id, startDate, endDate });
+    // Buscar punches
+    const punchesRes = await pool.query(
+      `SELECT TO_CHAR(date, 'YYYY-MM-DD') as date, punch_type, TO_CHAR(punch_time, 'HH24:MI:SS') as punch_time
+       FROM attendance_punches
+       WHERE employee_id = $1 AND date >= $2::date AND date <= $3::date
+       ORDER BY date DESC, punch_time ASC`,
+      [emp.id, startDate, endDate]
+    );
 
-    let attendanceRecords = [];
-    let presentDays = 0;
-    let totalHours = 0;
-
-    try {
-      // Buscar todos os punches do mês
-      const punchesResult = await pool.query(
-        `SELECT 
-          TO_CHAR(date, 'YYYY-MM-DD') as date,
-          punch_type,
-          TO_CHAR(punch_time, 'HH24:MI:SS') as punch_time
-         FROM attendance_punches
-         WHERE employee_id = $1
-           AND date >= $2::date
-           AND date <= $3::date
-         ORDER BY date DESC, punch_time ASC`,
-        [employee.id, startDate, endDate]
-      );
-      
-      console.log(`� Total de punches encontrados: ${punchesResult.rows.length}`);
-      
-      // Agregar punches por dia
-      const dailyRecords = {};
-      
-      punchesResult.rows.forEach(punch => {
-        if (!dailyRecords[punch.date]) {
-          dailyRecords[punch.date] = {
-            date: punch.date,
-            check_in: null,
-            break_start: null,
-            break_end: null,
-            check_out: null,
-            hours: 0
-          };
-        }
-        
-        if (punch.punch_type === 'entry') dailyRecords[punch.date].check_in = punch.punch_time;
-        else if (punch.punch_type === 'break_start') dailyRecords[punch.date].break_start = punch.punch_time;
-        else if (punch.punch_type === 'break_end') dailyRecords[punch.date].break_end = punch.punch_time;
-        else if (punch.punch_type === 'exit') dailyRecords[punch.date].check_out = punch.punch_time;
-      });
-      
-      // Calcular horas trabalhadas para cada dia
-      Object.values(dailyRecords).forEach(record => {
-        if (record.check_in && record.check_out) {
-          const [entryH, entryM] = record.check_in.split(':').map(Number);
-          const [exitH, exitM] = record.check_out.split(':').map(Number);
-          
-          let totalMinutes = (exitH * 60 + exitM) - (entryH * 60 + entryM);
-          
-          // Subtrair intervalo se houver
-          if (record.break_start && record.break_end) {
-            const [breakStartH, breakStartM] = record.break_start.split(':').map(Number);
-            const [breakEndH, breakEndM] = record.break_end.split(':').map(Number);
-            const breakMinutes = (breakEndH * 60 + breakEndM) - (breakStartH * 60 + breakStartM);
-            totalMinutes -= breakMinutes;
-          }
-          
-          record.hours = parseFloat((totalMinutes / 60).toFixed(2));
-        }
-      });
-      
-      attendanceRecords = Object.values(dailyRecords).slice(0, 10);
-      presentDays = Object.keys(dailyRecords).length;
-      totalHours = attendanceRecords.reduce((sum, r) => sum + (r.hours || 0), 0);
-      
-      console.log('✅ Registros processados:', attendanceRecords.length);
-      if (attendanceRecords.length > 0) {
-        console.log('� Primeiro registro:', JSON.stringify(attendanceRecords[0], null, 2));
+    // Agrupar punches por dia
+    const dailyRecords = {};
+    punchesRes.rows.forEach(punch => {
+      if (!dailyRecords[punch.date]) {
+        dailyRecords[punch.date] = { date: punch.date, check_in: null, check_out: null, break_start: null, break_end: null, hours: 0 };
       }
-    } catch (dbError) {
-      console.error('❌ Erro na query de frequência:', dbError);
-      throw dbError;
+      if (punch.punch_type === 'entry') dailyRecords[punch.date].check_in = punch.punch_time;
+      if (punch.punch_type === 'exit') dailyRecords[punch.date].check_out = punch.punch_time;
+      if (punch.punch_type === 'break_start') dailyRecords[punch.date].break_start = punch.punch_time;
+      if (punch.punch_type === 'break_end') dailyRecords[punch.date].break_end = punch.punch_time;
+    });
+
+    // Calcular horas
+    Object.values(dailyRecords).forEach(rec => {
+      if (rec.check_in && rec.check_out) {
+        const [eH, eM] = rec.check_in.split(':').map(Number);
+        const [xH, xM] = rec.check_out.split(':').map(Number);
+        let mins = (xH * 60 + xM) - (eH * 60 + eM);
+        
+        if (rec.break_start && rec.break_end) {
+          const [bsH, bsM] = rec.break_start.split(':').map(Number);
+          const [beH, beM] = rec.break_end.split(':').map(Number);
+          mins -= (beH * 60 + beM) - (bsH * 60 + bsM);
+        }
+        rec.hours = parseFloat((mins / 60).toFixed(2));
+      }
+    });
+
+    // Buscar schedule
+    let workdaySet = new Set();
+    if (emp.schedule_id) {
+      const schRes = await pool.query(`SELECT workdays FROM schedules WHERE id = $1`, [emp.schedule_id]);
+      if (schRes.rows.length > 0) {
+        let wd = schRes.rows[0].workdays;
+        if (typeof wd === 'string') wd = JSON.parse(wd);
+        if (Array.isArray(wd)) {
+          workdaySet = new Set(wd.map(d => typeof d === 'string' ? parseInt(d) : d).filter(d => !isNaN(d)));
+        }
+      }
     }
 
-    // Calcular estatísticas
-    const workDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const absentDays = Math.max(0, now.getDate() - presentDays);
+    // Calcular faltas (apenas dias de trabalho)
+    let absentDays = 0;
+    for (let d = 1; d <= now.getDate(); d++) {
+      const day = new Date(now.getFullYear(), now.getMonth(), d);
+      const dateStr = day.toISOString().split('T')[0];
+      const dayOfWeek = day.getDay();
+      const isWorkday = workdaySet.size === 0 || workdaySet.has(dayOfWeek);
+      
+      if (isWorkday && !dailyRecords[dateStr]) {
+        absentDays++;
+      }
+    }
 
-    console.log('📊 Estatísticas:', { presentDays, absentDays, totalHours });
-
-    // Log de sucesso (auditoria)
-    console.log(`✅ Consulta de frequência: ${employee.name} (${cpf.substring(0, 3)}***)`);
-    console.log('📤 Retornando dados:', {
-      employee: employee.name,
-      records: attendanceRecords.length,
-      present: presentDays,
-      absent: absentDays,
-      totalHours: parseFloat(totalHours.toFixed(2))
-    });
+    const presentDays = Object.keys(dailyRecords).length;
+    const totalHours = Object.values(dailyRecords).reduce((sum, r) => sum + (r.hours || 0), 0);
+    const attendanceRecords = Object.values(dailyRecords).slice(0, 10);
 
     res.json({
       success: true,
       employee: {
-        id: employee.id,
-        name: employee.name,
-        photo_url: employee.photo_url,
-        position_name: employee.position_name || 'Não informado',
-        department_name: employee.department_name || 'Não informado',
-        matricula: employee.matricula
+        id: emp.id,
+        name: emp.name,
+        photo_url: emp.photo_url,
+        position_name: emp.position_name || 'Não informado',
+        department_name: emp.department_name || 'Não informado',
+        matricula: emp.matricula
       },
       attendance: {
         month: monthStr,
@@ -225,39 +167,27 @@ router.post('/check-attendance', async (req, res) => {
           check_in: r.check_in || '00:00:00',
           check_out: r.check_out || null,
           hours: r.hours || 0
-        }))
+        })),
+        workdays: Array.from(workdaySet)
       }
     });
 
   } catch (error) {
-    console.error('❌ Erro ao consultar frequência:');
-    console.error('   Mensagem:', error.message);
-    console.error('   Stack:', error.stack);
-    console.error('   Código:', error.code);
-    
+    console.error('❌ Erro:', error.message);
     res.status(500).json({ 
       success: false,
-      message: 'Erro ao consultar frequência. Tente novamente mais tarde.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Erro ao consultar frequência.'
     });
   }
 });
 
-// Buscar dados completos do funcionário para ficha
+// GET - Dados completos do funcionário
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT 
-        e.*,
-        p.name as position_name,
-        d.name as department_name,
-        s.name as sector_name,
-        sc.name as schedule_name,
-        sc.start_time,
-        sc.end_time,
-        sc.break_start,
-        sc.break_end,
-        sc.workdays
+        e.*, p.name as position_name, d.name as department_name, s.name as sector_name,
+        sc.name as schedule_name, sc.start_time, sc.end_time, sc.break_start, sc.break_end, sc.workdays
       FROM employees e
       LEFT JOIN positions p ON e.position_id = p.id
       LEFT JOIN departments d ON e.department_id = d.id
@@ -271,18 +201,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Funcionário não encontrado' });
     }
 
-    // Buscar estatísticas de frequência dos últimos 30 dias
     const statsResult = await pool.query(
-      `SELECT 
-        COUNT(DISTINCT date) as total_days,
-        COUNT(*) as total_punches
-      FROM attendance_punches 
-      WHERE employee_id = $1 
-      AND date >= CURRENT_DATE - INTERVAL '30 days'`,
+      `SELECT COUNT(DISTINCT date) as total_days, COUNT(*) as total_punches
+       FROM attendance_punches WHERE employee_id = $1 AND date >= CURRENT_DATE - INTERVAL '30 days'`,
       [req.params.id]
     );
     
-    // Calcular média de horas trabalhadas
     const hoursResult = await pool.query(
       `WITH daily_punches AS (
         SELECT 
@@ -292,16 +216,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
           MAX(CASE WHEN punch_type = 'break_start' THEN punch_time END) as break_start,
           MAX(CASE WHEN punch_type = 'break_end' THEN punch_time END) as break_end
         FROM attendance_punches
-        WHERE employee_id = $1
-        AND date >= CURRENT_DATE - INTERVAL '30 days'
+        WHERE employee_id = $1 AND date >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY date
       )
       SELECT 
         COUNT(*) as complete_days,
-        AVG(
-          EXTRACT(EPOCH FROM (exit - entry))/3600 - 
-          COALESCE(EXTRACT(EPOCH FROM (break_end - break_start))/3600, 0)
-        ) as avg_hours
+        AVG(EXTRACT(EPOCH FROM (exit - entry))/3600 - COALESCE(EXTRACT(EPOCH FROM (break_end - break_start))/3600, 0)) as avg_hours
       FROM daily_punches
       WHERE entry IS NOT NULL AND exit IS NOT NULL`,
       [req.params.id]
@@ -321,8 +241,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Erro ao buscar ficha do funcionário:', error);
-    res.status(500).json({ error: 'Erro ao buscar ficha do funcionário' });
+    console.error('Erro:', error);
+    res.status(500).json({ error: 'Erro ao buscar dados do funcionário' });
   }
 });
 

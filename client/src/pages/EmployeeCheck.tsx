@@ -27,6 +27,7 @@ interface AttendanceData {
   absent: number
   totalHours: number
   records: AttendanceRecord[]
+  workdays?: number[] // Dias que o funcionário trabalha (0-6)
 }
 
 export default function EmployeeCheck() {
@@ -272,40 +273,78 @@ export default function EmployeeCheck() {
                           const checkInTime = record.check_in || '00:00:00'
                           const checkOutTime = record.check_out || null
                           
+                          // Determinar se é dia de folga
+                          const dayOfWeek = recordDate.getDay() // 0=dom, 6=sab
+                          const workdays = attendance.workdays || []
+                          const isWorkday = workdays.length === 0 || workdays.includes(dayOfWeek)
+                          
+                          // Determinar status do dia
+                          let dayStatus = 'present' // padrão: presente
+                          let statusLabel = 'Presente'
+                          let statusColor = 'bg-green-100'
+                          let statusTextColor = 'text-green-700'
+                          
+                          if (!checkInTime || checkInTime === '00:00:00') {
+                            // Sem registro de ponto
+                            if (!isWorkday) {
+                              dayStatus = 'off'
+                              statusLabel = 'Folga'
+                              statusColor = 'bg-gray-100'
+                              statusTextColor = 'text-gray-700'
+                            } else {
+                              dayStatus = 'absent'
+                              statusLabel = 'Falta'
+                              statusColor = 'bg-red-100'
+                              statusTextColor = 'text-red-700'
+                            }
+                          }
+                          
                           return (
                             <div
                               key={index}
-                              className="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:bg-gray-100 transition-colors"
+                              className={`rounded-lg p-4 border transition-colors ${
+                                dayStatus === 'present'
+                                  ? 'bg-green-50 border-green-200 hover:bg-green-100'
+                                  : dayStatus === 'off'
+                                  ? 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                                  : 'bg-red-50 border-red-200 hover:bg-red-100'
+                              }`}
                             >
                               <div className="flex items-center justify-between mb-2">
                                 <span className="font-semibold text-gray-900">
                                   {format(recordDate, "dd/MM/yyyy - EEEE", { locale: ptBR })}
                                 </span>
-                                <span className="text-sm font-medium text-primary-600 bg-primary-50 px-2 py-1 rounded">
-                                  {record.hours.toFixed(1)}h
+                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${statusColor} ${statusTextColor}`}>
+                                  {statusLabel}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-4 text-sm">
-                                <div className="flex items-center gap-2">
-                                  <div className="flex items-center justify-center w-6 h-6 bg-green-100 rounded">
-                                    <span className="text-green-600 font-bold text-xs">↓</span>
+                              
+                              {dayStatus === 'present' && (
+                                <div className="flex items-center gap-4 text-sm">
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex items-center justify-center w-6 h-6 bg-green-100 rounded">
+                                      <span className="text-green-600 font-bold text-xs">↓</span>
+                                    </div>
+                                    <span className="font-semibold text-gray-700">
+                                      {checkInTime.substring(0, 5)}
+                                    </span>
+                                    <span className="text-xs text-gray-500">Entrada</span>
                                   </div>
-                                  <span className="font-semibold text-gray-700">
-                                    {checkInTime.substring(0, 5)}
-                                  </span>
-                                  <span className="text-xs text-gray-500">Entrada</span>
-                                </div>
-                                <span className="text-gray-300">→</span>
-                                <div className="flex items-center gap-2">
-                                  <div className="flex items-center justify-center w-6 h-6 bg-red-100 rounded">
-                                    <span className="text-red-600 font-bold text-xs">↑</span>
+                                  <span className="text-gray-300">→</span>
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex items-center justify-center w-6 h-6 bg-red-100 rounded">
+                                      <span className="text-red-600 font-bold text-xs">↑</span>
+                                    </div>
+                                    <span className="font-semibold text-gray-700">
+                                      {checkOutTime ? checkOutTime.substring(0, 5) : '--:--'}
+                                    </span>
+                                    <span className="text-xs text-gray-500">Saída</span>
                                   </div>
-                                  <span className="font-semibold text-gray-700">
-                                    {checkOutTime ? checkOutTime.substring(0, 5) : '--:--'}
+                                  <span className="text-sm font-medium text-primary-600 bg-primary-50 px-2 py-1 rounded ml-auto">
+                                    {record.hours.toFixed(1)}h
                                   </span>
-                                  <span className="text-xs text-gray-500">Saída</span>
                                 </div>
-                              </div>
+                              )}
                             </div>
                           )
                         })
@@ -338,7 +377,7 @@ export default function EmployeeCheck() {
           className="flex items-center justify-center gap-2 text-gray-700 hover:text-gray-900 font-medium transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />
-          Voltar para Login
+          Fazer Login
         </Link>
       </div>
     </div>

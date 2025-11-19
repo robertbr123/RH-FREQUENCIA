@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Fundo gradiente -->
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2563eb;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Círculo de fundo -->
+  <circle cx="50" cy="50" r="50" fill="url(#grad)"/>
+  
+  <!-- Ícone de pessoas (representando RH) -->
+  <!-- Cabeça 1 -->
+  <circle cx="35" cy="30" r="8" fill="white"/>
+  
+  <!-- Corpo 1 -->
+  <rect x="30" y="40" width="10" height="20" rx="2" fill="white"/>
+  
+  <!-- Cabeça 2 -->
+  <circle cx="65" cy="30" r="8" fill="white"/>
+  
+  <!-- Corpo 2 -->
+  <rect x="60" y="40" width="10" height="20" rx="2" fill="white"/>
+  
+  <!-- Cabeça 3 (centro, menor) -->
+  <circle cx="50" cy="35" r="7" fill="white" opacity="0.9"/>
+  
+  <!-- Corpo 3 -->
+  <rect x="46" y="44" width="8" height="18" rx="2" fill="white" opacity="0.9"/>
+  
+  <!-- Linha de conexão (representing connection) -->
+  <line x1="35" y1="60" x2="65" y2="60" stroke="white" stroke-width="2" opacity="0.6"/>
+  <line x1="50" y1="62" x2="50" y2="75" stroke="white" stroke-width="2" opacity="0.6"/>
+</svg>

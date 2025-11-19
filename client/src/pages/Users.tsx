@@ -12,12 +12,19 @@ interface User {
   name: string
   email: string
   role: string
+  department_id?: number
   status: string
   created_at: string
 }
 
+interface Department {
+  id: number
+  name: string
+}
+
 export default function Users() {
   const [users, setUsers] = useState<User[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
@@ -31,6 +38,7 @@ export default function Users() {
 
   useEffect(() => {
     loadUsers()
+    loadDepartments()
   }, [])
 
   const loadUsers = async () => {
@@ -45,6 +53,18 @@ export default function Users() {
       toast.error(message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadDepartments = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/organization/departments', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setDepartments(response.data)
+    } catch (error) {
+      console.error('Erro ao carregar departamentos:', error)
     }
   }
 
@@ -423,6 +443,7 @@ export default function Users() {
       {showModal && (
         <UserModal
           user={editingUser}
+          departments={departments}
           onClose={() => {
             setShowModal(false)
             setEditingUser(null)
@@ -453,10 +474,12 @@ export default function Users() {
 // Modal Component
 function UserModal({
   user,
+  departments,
   onClose,
   onSave,
 }: {
   user: User | null
+  departments: Department[]
   onClose: () => void
   onSave: () => void
 }) {
@@ -466,6 +489,7 @@ function UserModal({
     name: user?.name || '',
     email: user?.email || '',
     role: user?.role || 'operador',
+    department_id: user?.department_id || null,
     status: user?.status || 'active',
   })
   const [loading, setLoading] = useState(false)
@@ -478,9 +502,21 @@ function UserModal({
       const token = localStorage.getItem('token')
       const config = { headers: { Authorization: `Bearer ${token}` } }
 
+      // Validar se gestor tem departamento
+      if (formData.role === 'gestor' && !formData.department_id) {
+        toast.warning('Departamento é obrigatório para gestores')
+        setLoading(false)
+        return
+      }
+
+      const submitData = {
+        ...formData,
+        department_id: formData.department_id || null,
+      }
+
       if (user) {
         // Editar
-        await axios.put(`/api/users/${user.id}`, formData, config)
+        await axios.put(`/api/users/${user.id}`, submitData, config)
         toast.success('Usuário atualizado com sucesso!')
       } else {
         // Criar
@@ -489,7 +525,7 @@ function UserModal({
           setLoading(false)
           return
         }
-        await axios.post('/api/users', formData, config)
+        await axios.post('/api/users', submitData, config)
         toast.success('Usuário criado com sucesso!')
       }
 
@@ -503,7 +539,7 @@ function UserModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
         <h2 className="text-xl font-bold mb-4">
           {user ? 'Editar Usuário' : 'Novo Usuário'}
         </h2>
@@ -559,7 +595,7 @@ function UserModal({
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Nível de Acesso *</label>
             <select
               value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+              onChange={(e) => setFormData({ ...formData, role: e.target.value, department_id: e.target.value !== 'gestor' ? null : formData.department_id })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
               required
             >
@@ -568,6 +604,31 @@ function UserModal({
               <option value="admin">Administrador</option>
             </select>
           </div>
+
+          {formData.role === 'gestor' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Departamento *
+                <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formData.department_id || ''}
+                onChange={(e) => setFormData({ ...formData, department_id: e.target.value ? parseInt(e.target.value) : null })}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                required={formData.role === 'gestor'}
+              >
+                <option value="">Selecione um departamento</option>
+                {departments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>
+                    {dept.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                O gestor terá acesso apenas aos funcionários deste departamento
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status *</label>
