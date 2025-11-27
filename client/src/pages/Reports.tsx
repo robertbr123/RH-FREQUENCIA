@@ -386,7 +386,7 @@ export default function Reports() {
       setAttendanceData(fullMonthData)
     } catch (error) {
       console.error('Erro ao carregar dados:', error)
-      alert('Erro ao carregar dados de frequência')
+      toast.error('Erro ao carregar dados de frequência')
     } finally {
       setLoading(false)
     }
@@ -1114,7 +1114,7 @@ export default function Reports() {
 
     } catch (error) {
       console.error('Erro ao gerar relatório geral:', error)
-      alert('Erro ao gerar relatório geral')
+      toast.error('Erro ao gerar relatório geral')
     } finally {
       setLoading(false)
     }

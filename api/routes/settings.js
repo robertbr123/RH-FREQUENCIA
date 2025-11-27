@@ -27,7 +27,20 @@ router.get('/', authenticateToken, async (req, res) => {
         company_name: 'Empresa',
         company_address: '',
         company_phone: '',
-        company_email: ''
+        company_email: '',
+        timezone: 'America/Sao_Paulo',
+        date_format: 'dd/MM/yyyy',
+        time_format: '24h',
+        language: 'pt-BR',
+        attendance_tolerance_minutes: 5,
+        max_daily_hours: 12,
+        enable_facial_recognition: true,
+        enable_qr_scanner: true,
+        require_photo: false,
+        enable_notifications: true,
+        enable_email_notifications: false,
+        auto_backup_enabled: false,
+        backup_frequency_days: 7
       });
     }
     
@@ -48,7 +61,20 @@ router.put('/', authenticateToken, isAdmin, async (req, res) => {
     company_name,
     company_address,
     company_phone,
-    company_email
+    company_email,
+    timezone,
+    date_format,
+    time_format,
+    language,
+    attendance_tolerance_minutes,
+    max_daily_hours,
+    enable_facial_recognition,
+    enable_qr_scanner,
+    require_photo,
+    enable_notifications,
+    enable_email_notifications,
+    auto_backup_enabled,
+    backup_frequency_days
   } = req.body;
 
   try {
@@ -61,9 +87,22 @@ router.put('/', authenticateToken, isAdmin, async (req, res) => {
       result = await pool.query(
         `INSERT INTO system_settings (
           system_name, primary_color, logo_url, icon_url,
-          company_name, company_address, company_phone, company_email
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [system_name, primary_color, logo_url, icon_url, company_name, company_address, company_phone, company_email]
+          company_name, company_address, company_phone, company_email,
+          timezone, date_format, time_format, language,
+          attendance_tolerance_minutes, max_daily_hours,
+          enable_facial_recognition, enable_qr_scanner, require_photo,
+          enable_notifications, enable_email_notifications,
+          auto_backup_enabled, backup_frequency_days
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *`,
+        [
+          system_name, primary_color, logo_url, icon_url,
+          company_name, company_address, company_phone, company_email,
+          timezone, date_format, time_format, language,
+          attendance_tolerance_minutes, max_daily_hours,
+          enable_facial_recognition, enable_qr_scanner, require_photo,
+          enable_notifications, enable_email_notifications,
+          auto_backup_enabled, backup_frequency_days
+        ]
       );
     } else {
       // Atualizar configuração existente
@@ -77,9 +116,31 @@ router.put('/', authenticateToken, isAdmin, async (req, res) => {
           company_address = $6,
           company_phone = $7,
           company_email = $8,
+          timezone = $9,
+          date_format = $10,
+          time_format = $11,
+          language = $12,
+          attendance_tolerance_minutes = $13,
+          max_daily_hours = $14,
+          enable_facial_recognition = $15,
+          enable_qr_scanner = $16,
+          require_photo = $17,
+          enable_notifications = $18,
+          enable_email_notifications = $19,
+          auto_backup_enabled = $20,
+          backup_frequency_days = $21,
           updated_at = CURRENT_TIMESTAMP
-        WHERE id = $9 RETURNING *`,
-        [system_name, primary_color, logo_url, icon_url, company_name, company_address, company_phone, company_email, existing.rows[0].id]
+        WHERE id = $22 RETURNING *`,
+        [
+          system_name, primary_color, logo_url, icon_url,
+          company_name, company_address, company_phone, company_email,
+          timezone, date_format, time_format, language,
+          attendance_tolerance_minutes, max_daily_hours,
+          enable_facial_recognition, enable_qr_scanner, require_photo,
+          enable_notifications, enable_email_notifications,
+          auto_backup_enabled, backup_frequency_days,
+          existing.rows[0].id
+        ]
       );
     }
 

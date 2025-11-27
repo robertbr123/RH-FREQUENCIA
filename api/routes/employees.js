@@ -233,4 +233,49 @@ router.delete('/:id', authenticateToken, checkDepartmentAccess, async (req, res)
   }
 });
 
+// Upload de foto do funcionário
+router.post('/:id/photo', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { photo } = req.body; // base64 string
+
+  try {
+    // Verificar se é admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem fazer upload de fotos' });
+    }
+
+    if (!photo) {
+      return res.status(400).json({ error: 'Foto é obrigatória' });
+    }
+
+    // Verificar se funcionário existe
+    const employeeCheck = await pool.query(
+      'SELECT id, name FROM employees WHERE id = $1',
+      [id]
+    );
+
+    if (employeeCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    }
+
+    // Salvar diretamente a base64 no banco (ou fazer upload para storage)
+    // Para simplicidade, vamos salvar a base64 diretamente
+    const photo_url = photo; // Em produção, fazer upload para S3/Cloudinary
+
+    await pool.query(
+      'UPDATE employees SET photo_url = $1 WHERE id = $2',
+      [photo_url, id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Foto atualizada com sucesso',
+      photo_url: photo_url
+    });
+  } catch (error) {
+    console.error('Erro ao fazer upload de foto:', error);
+    res.status(500).json({ error: 'Erro ao fazer upload de foto' });
+  }
+});
+
 export default router;

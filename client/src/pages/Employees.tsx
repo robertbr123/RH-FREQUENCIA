@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import axios from 'axios'
-import { Plus, Search, Edit, Trash2, UserCircle, FileText, Upload, Download, Users, UserCheck, UserX, Briefcase, List, LayoutGrid } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, UserCircle, FileText, Upload, Download, Users, UserCheck, UserX, Briefcase, List, LayoutGrid, Camera, Filter, X } from 'lucide-react'
 import EmployeeModal from '../components/EmployeeModal'
 import EmployeeCard from '../components/EmployeeCard'
 import ConfirmDialog from '../components/ConfirmDialog'
+import FaceRegistrationModal from '../components/FaceRegistrationModal'
+import EmptyState from '../components/EmptyState'
+import SearchInput from '../components/SearchInput'
 import { toast } from '../utils/toast'
 
 interface Employee {
@@ -49,6 +52,8 @@ export default function Employees() {
   })
   const [isDeleting, setIsDeleting] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [faceModalOpen, setFaceModalOpen] = useState(false)
+  const [faceEmployee, setFaceEmployee] = useState<Employee | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('list')
@@ -433,7 +438,7 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
         <div className="h-12 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse"></div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 animate-pulse">
+            <div key={i} className="backdrop-blur-xl bg-white/60 dark:bg-gray-800/60 rounded-2xl shadow-xl p-6 animate-pulse border border-white/30 dark:border-gray-700/30">
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center">
                   <div className="w-14 h-14 bg-gray-200 dark:bg-gray-700 rounded-full"></div>
@@ -455,7 +460,17 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in relative">
+      {/* Background com gradiente azul */}
+      <div className="fixed inset-0 -z-10 bg-gradient-to-br from-indigo-50 via-blue-50 to-cyan-50 dark:from-gray-900 dark:via-blue-900/20 dark:to-cyan-900/20"></div>
+      
+      {/* Formas flutuantes de fundo */}
+      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 -left-20 w-96 h-96 bg-indigo-200/30 dark:bg-indigo-500/10 rounded-full blur-3xl animate-float"></div>
+        <div className="absolute top-1/3 -right-20 w-[500px] h-[500px] bg-blue-200/30 dark:bg-blue-500/10 rounded-full blur-3xl animate-float-delayed"></div>
+        <div className="absolute bottom-20 left-1/3 w-96 h-96 bg-cyan-200/30 dark:bg-cyan-500/10 rounded-full blur-3xl animate-float-slow"></div>
+      </div>
+
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent dark:from-blue-400 dark:to-purple-400">Funcionários</h1>
@@ -512,53 +527,53 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
 
       {/* Cards de Estatísticas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="group bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-4 border-2 border-blue-200 dark:border-blue-800 hover:shadow-lg transition-all duration-300 hover:scale-105">
+        <div className="group backdrop-blur-xl bg-blue-500/10 dark:bg-blue-500/20 rounded-2xl p-4 border border-blue-200/30 dark:border-blue-700/30 hover:shadow-lg transition-all duration-300 hover:scale-105">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-blue-700 dark:text-blue-400 font-medium mb-1">Total</p>
-              <p className="text-3xl font-bold text-blue-900 dark:text-blue-300">{employees.length}</p>
+              <p className="text-sm text-blue-700 dark:text-blue-300 font-medium mb-1">Total</p>
+              <p className="text-3xl font-bold text-blue-900 dark:text-blue-100">{employees.length}</p>
             </div>
-            <div className="bg-blue-500 p-3 rounded-lg group-hover:scale-110 transition-transform">
+            <div className="bg-blue-500/80 backdrop-blur-sm p-3 rounded-lg group-hover:scale-110 transition-transform">
               <Users className="w-6 h-6 text-white" />
             </div>
           </div>
         </div>
 
-        <div className="group bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl p-4 border-2 border-green-200 dark:border-green-800 hover:shadow-lg transition-all duration-300 hover:scale-105">
+        <div className="group backdrop-blur-xl bg-green-500/10 dark:bg-green-500/20 rounded-2xl p-4 border border-green-200/30 dark:border-green-700/30 hover:shadow-lg transition-all duration-300 hover:scale-105">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-green-700 dark:text-green-400 font-medium mb-1">Ativos</p>
-              <p className="text-3xl font-bold text-green-900 dark:text-green-300">
+              <p className="text-sm text-green-700 dark:text-green-300 font-medium mb-1">Ativos</p>
+              <p className="text-3xl font-bold text-green-900 dark:text-green-100">
                 {employees.filter(e => e.status === 'active').length}
               </p>
             </div>
-            <div className="bg-green-500 p-3 rounded-lg group-hover:scale-110 transition-transform">
+            <div className="bg-green-500/80 backdrop-blur-sm p-3 rounded-lg group-hover:scale-110 transition-transform">
               <UserCheck className="w-6 h-6 text-white" />
             </div>
           </div>
         </div>
 
-        <div className="group bg-gradient-to-br from-gray-50 to-slate-50 dark:from-gray-800 dark:to-slate-800 rounded-xl p-4 border-2 border-gray-200 dark:border-gray-700 hover:shadow-lg transition-all duration-300 hover:scale-105">
+        <div className="group backdrop-blur-xl bg-gray-500/10 dark:bg-gray-500/20 rounded-2xl p-4 border border-gray-200/30 dark:border-gray-700/30 hover:shadow-lg transition-all duration-300 hover:scale-105">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-700 dark:text-gray-400 font-medium mb-1">Inativos</p>
-              <p className="text-3xl font-bold text-gray-900 dark:text-gray-300">
+              <p className="text-sm text-gray-700 dark:text-gray-300 font-medium mb-1">Inativos</p>
+              <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">
                 {employees.filter(e => e.status === 'inactive').length}
               </p>
             </div>
-            <div className="bg-gray-500 p-3 rounded-lg group-hover:scale-110 transition-transform">
+            <div className="bg-gray-500/80 backdrop-blur-sm p-3 rounded-lg group-hover:scale-110 transition-transform">
               <UserX className="w-6 h-6 text-white" />
             </div>
           </div>
         </div>
 
-        <div className="group bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-xl p-4 border-2 border-purple-200 dark:border-purple-800 hover:shadow-lg transition-all duration-300 hover:scale-105">
+        <div className="group backdrop-blur-xl bg-purple-500/10 dark:bg-purple-500/20 rounded-2xl p-4 border border-purple-200/30 dark:border-purple-700/30 hover:shadow-lg transition-all duration-300 hover:scale-105">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-purple-700 dark:text-purple-400 font-medium mb-1">Departamentos</p>
-              <p className="text-3xl font-bold text-purple-900 dark:text-purple-300">{departments.length}</p>
+              <p className="text-sm text-purple-700 dark:text-purple-300 font-medium mb-1">Departamentos</p>
+              <p className="text-3xl font-bold text-purple-900 dark:text-purple-100">{departments.length}</p>
             </div>
-            <div className="bg-purple-500 p-3 rounded-lg group-hover:scale-110 transition-transform">
+            <div className="bg-purple-500/80 backdrop-blur-sm p-3 rounded-lg group-hover:scale-110 transition-transform">
               <Briefcase className="w-6 h-6 text-white" />
             </div>
           </div>
@@ -580,9 +595,9 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
         </div>
       </div>
 
-      {/* Filters com gradiente */}
-      <div className="relative bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-700 rounded-xl shadow-md hover:shadow-lg transition-shadow duration-300 p-6 mb-6 border border-gray-200 dark:border-gray-600">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-t-xl"></div>
+      {/* Filters com glassmorphism */}
+      <div className="relative backdrop-blur-xl bg-white/60 dark:bg-gray-800/60 rounded-2xl shadow-xl hover:shadow-2xl transition-shadow duration-300 p-6 mb-6 border border-white/30 dark:border-gray-700/30">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-blue-500 to-cyan-500 rounded-t-2xl"></div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <select
             value={selectedDepartment}
@@ -700,7 +715,21 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
       </div>
 
       {/* Employees Grid ou Lista */}
-      {viewMode === 'cards' ? (
+      {paginatedEmployees.length === 0 ? (
+        <EmptyState
+          icon={Users}
+          title="Nenhum funcionário encontrado"
+          description={searchTerm || selectedDepartment || selectedPosition || selectedSector || selectedStatus
+            ? "Tente ajustar os filtros para encontrar funcionários"
+            : "Comece cadastrando o primeiro funcionário da sua equipe"
+          }
+          action={{
+            label: "Adicionar Funcionário",
+            onClick: handleAdd,
+            icon: Plus
+          }}
+        />
+      ) : viewMode === 'cards' ? (
         /* View em Cards */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {paginatedEmployees.map((employee, index) => (
@@ -787,6 +816,14 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                   Ficha
                 </button>
                 <button
+                  onClick={() => { setFaceEmployee(employee); setFaceModalOpen(true); }}
+                  className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 text-green-700 dark:text-green-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
+                  title="Cadastrar Face"
+                >
+                  <Camera className="w-4 h-4 mr-1" />
+                  Face
+                </button>
+                <button
                   onClick={() => handleEdit(employee)}
                   className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 text-purple-700 dark:text-purple-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
                 >
@@ -811,7 +848,7 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
       </div>
       ) : (
         /* View em Lista/Tabela */
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
+        <div className="backdrop-blur-xl bg-white/60 dark:bg-gray-800/60 rounded-2xl shadow-xl overflow-hidden border border-white/30 dark:border-gray-700/30">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-gray-700 dark:to-gray-600">
@@ -913,6 +950,13 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                           <FileText className="w-5 h-5" />
                         </button>
                         <button
+                          onClick={() => { setFaceEmployee(employee); setFaceModalOpen(true); }}
+                          className="p-2 text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200"
+                          title="Cadastrar Face"
+                        >
+                          <Camera className="w-5 h-5" />
+                        </button>
+                        <button
                           onClick={() => handleEdit(employee)}
                           className="p-2 text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200"
                           title="Editar"
@@ -984,6 +1028,14 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
         type={confirmDialog.employeeStatus === 'active' ? 'warning' : 'info'}
         isLoading={isDeleting}
       />
+
+      {faceModalOpen && faceEmployee && (
+        <FaceRegistrationModal
+          employee={faceEmployee}
+          onClose={() => { setFaceModalOpen(false); setFaceEmployee(null); }}
+          onSuccess={() => { loadEmployees(); }}
+        />
+      )}
     </div>
   )
 }

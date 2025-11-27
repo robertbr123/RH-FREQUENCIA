@@ -177,7 +177,7 @@ export default function AttendanceAdmin() {
       
       setEditing(null)
       loadPunches()
-      alert('Ponto atualizado com sucesso!')
+      toast.success('Ponto atualizado com sucesso!')
     } catch (error: any) {
       console.error('Erro ao atualizar ponto:', error)
       alert(error.response?.data?.error || 'Erro ao atualizar ponto')

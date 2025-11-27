@@ -632,4 +632,211 @@ router.delete('/punches/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para verificar face e identificar funcionário
+router.post('/face-verify', authenticateToken, async (req, res) => {
+  try {
+    console.log('=== Iniciando verificação facial ===');
+    console.log('Headers recebidos:', Object.keys(req.headers));
+    console.log('Body recebido:', req.body ? 'presente' : 'ausente');
+    console.log('User autenticado:', req.user ? req.user.username : 'nenhum');
+    
+    const { faceDescriptor } = req.body;
+    
+    console.log('Tipo do descriptor recebido:', typeof faceDescriptor);
+    console.log('É array?', Array.isArray(faceDescriptor));
+    console.log('Tamanho do descriptor:', faceDescriptor?.length);
+    console.log('Primeiros 5 valores:', faceDescriptor?.slice(0, 5));
+    
+    if (!faceDescriptor || !Array.isArray(faceDescriptor)) {
+      console.error('❌ Face descriptor inválido:', typeof faceDescriptor);
+      return res.status(400).json({ 
+        error: 'faceDescriptor inválido',
+        details: 'Descriptor deve ser um array de números'
+      });
+    }
+
+    if (faceDescriptor.length !== 128) {
+      console.error(`❌ Descriptor tem tamanho incorreto: ${faceDescriptor.length} (esperado: 128)`);
+      return res.status(400).json({ 
+        error: 'faceDescriptor inválido',
+        details: `Descriptor deve ter 128 valores, mas tem ${faceDescriptor.length}`
+      });
+    }
+
+    console.log(`✅ Descriptor válido - length: ${faceDescriptor.length}`);
+
+    // Buscar todos os funcionários ativos com face_descriptor cadastrado
+    console.log('🔍 Buscando funcionários com face cadastrada...');
+    const result = await pool.query(
+      `SELECT id, name, cpf, face_descriptor 
+       FROM employees 
+       WHERE status = 'active' AND face_descriptor IS NOT NULL AND face_descriptor != ''`
+    );
+
+    console.log(`📊 Funcionários encontrados: ${result.rows.length}`);
+    
+    if (result.rows.length > 0) {
+      console.log('📋 Funcionários com face:');
+      result.rows.forEach(emp => {
+        const descLength = emp.face_descriptor ? emp.face_descriptor.length : 0;
+        console.log(`  - ${emp.name} (ID: ${emp.id}): descriptor length = ${descLength}`);
+      });
+    }
+
+    if (result.rows.length === 0) {
+      console.warn('Nenhum funcionário tem face cadastrada');
+      return res.status(404).json({ 
+        error: 'Nenhum funcionário com reconhecimento facial cadastrado.',
+        hint: 'Vá em Funcionários → Clique no ícone de câmera para cadastrar uma face',
+        verified: false 
+      });
+    }
+
+    // Função para calcular distância euclidiana
+    const euclideanDistance = (desc1, desc2) => {
+      if (desc1.length !== desc2.length) {
+        console.error(`Tamanhos diferentes: ${desc1.length} vs ${desc2.length}`);
+        return Infinity;
+      }
+      return Math.sqrt(
+        desc1.reduce((sum, val, i) => sum + Math.pow(val - desc2[i], 2), 0)
+      );
+    };
+
+    // Verificar qual funcionário corresponde à face
+    let bestMatch = null;
+    let bestDistance = Infinity;
+    const threshold = 0.6; // Ajustar conforme necessário
+
+    console.log('--- Comparando com faces cadastradas ---');
+
+    for (const employee of result.rows) {
+      if (!employee.face_descriptor) {
+        console.log(`⚠️ ${employee.name}: face_descriptor está vazio`);
+        continue;
+      }
+
+      try {
+        console.log(`🔍 Processando ${employee.name}...`);
+        console.log(`   Tipo do descriptor armazenado: ${typeof employee.face_descriptor}`);
+        console.log(`   Primeiros 100 caracteres: ${employee.face_descriptor.substring(0, 100)}`);
+        
+        const storedDescriptor = JSON.parse(employee.face_descriptor);
+        
+        if (!Array.isArray(storedDescriptor)) {
+          console.error(`❌ ${employee.name}: descriptor não é array (tipo: ${typeof storedDescriptor})`);
+          continue;
+        }
+        
+        console.log(`   Array length: ${storedDescriptor.length}`);
+        
+        if (storedDescriptor.length !== 128) {
+          console.error(`❌ ${employee.name}: descriptor tem ${storedDescriptor.length} valores (esperado: 128)`);
+          continue;
+        }
+        
+        const distance = euclideanDistance(faceDescriptor, storedDescriptor);
+
+        console.log(`✅ ${employee.name}: distância = ${distance.toFixed(3)} (threshold: ${threshold})`);
+
+        if (distance < bestDistance && distance < threshold) {
+          bestDistance = distance;
+          bestMatch = employee;
+        }
+      } catch (parseError) {
+        console.error(`❌ Erro ao parsear descriptor de ${employee.name}:`, parseError.message);
+        console.error(`   Conteúdo do descriptor: ${employee.face_descriptor.substring(0, 200)}`);
+      }
+    }
+
+    if (bestMatch) {
+      console.log(`✅ Match encontrado: ${bestMatch.name} (distância: ${bestDistance.toFixed(3)})`);
+      return res.json({
+        verified: true,
+        employee: {
+          id: bestMatch.id,
+          name: bestMatch.name,
+          cpf: bestMatch.cpf
+        },
+        confidence: (1 - bestDistance).toFixed(2) // Confiança de 0-1
+      });
+    } else {
+      console.log(`❌ Nenhum match encontrado. Melhor distância: ${bestDistance.toFixed(3)} (threshold: ${threshold})`);
+      return res.status(404).json({
+        error: 'Face não reconhecida.',
+        hint: 'Certifique-se de ter cadastrado sua face em Funcionários → ícone de câmera',
+        details: `Melhor similaridade: ${((1 - bestDistance) * 100).toFixed(1)}% (mínimo necessário: ${((1 - threshold) * 100).toFixed(1)}%)`,
+        verified: false
+      });
+    }
+  } catch (error) {
+    console.error('❌ Erro ao verificar face:', error);
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      error: 'Erro ao verificar reconhecimento facial',
+      details: error.message,
+      hint: 'Verifique os logs do servidor para mais detalhes'
+    });
+  }
+});
+
+// Endpoint para registrar/atualizar face de um funcionário (admin apenas)
+router.post('/face-register', authenticateToken, async (req, res) => {
+  const { employee_id, faceDescriptor } = req.body;
+
+  try {
+    // Verificar se é admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem registrar faces' });
+    }
+
+    if (!employee_id || !faceDescriptor || !Array.isArray(faceDescriptor)) {
+      return res.status(400).json({ error: 'employee_id e faceDescriptor são obrigatórios' });
+    }
+
+    // Verificar se funcionário existe
+    const employeeCheck = await pool.query(
+      'SELECT id, name FROM employees WHERE id = $1',
+      [employee_id]
+    );
+
+    if (employeeCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    }
+
+    console.log(`Registrando face para funcionário ${employee_id} - ${employeeCheck.rows[0].name}`);
+    console.log(`Descriptor length: ${faceDescriptor.length}`);
+
+    // Salvar descriptor como JSON
+    const updateResult = await pool.query(
+      'UPDATE employees SET face_descriptor = $1 WHERE id = $2 RETURNING id, name',
+      [JSON.stringify(faceDescriptor), employee_id]
+    );
+
+    console.log('Face registrada com sucesso:', updateResult.rows[0]);
+
+    res.json({
+      success: true,
+      message: `Reconhecimento facial registrado para ${employeeCheck.rows[0].name}`,
+      employee: employeeCheck.rows[0]
+    });
+  } catch (error) {
+    console.error('Erro ao registrar face:', error);
+    console.error('Stack trace:', error.stack);
+    
+    // Detectar erro de coluna não existente
+    if (error.message && error.message.includes('column') && error.message.includes('face_descriptor')) {
+      return res.status(500).json({ 
+        error: 'Coluna face_descriptor não encontrada. Execute a migração: psql $DATABASE_URL -f api/migrations/add-face-recognition.sql',
+        details: error.message
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Erro ao registrar reconhecimento facial',
+      details: error.message 
+    });
+  }
+});
+
 export default router;

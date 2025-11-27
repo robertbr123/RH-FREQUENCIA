@@ -165,7 +165,7 @@ export default function Organization() {
       loadData()
     } catch (error: any) {
       console.error('Erro no handleSave:', error)
-      alert(error.response?.data?.error || 'Erro ao salvar')
+      toast.error(error.response?.data?.error || 'Erro ao salvar')
     }
   }
 
@@ -178,7 +178,7 @@ export default function Organization() {
       await axios.delete(`/api/organization/${activeTab}/${id}`, config)
       loadData()
     } catch (error: any) {
-      alert(error.response?.data?.error || 'Erro ao deletar')
+      toast.error(error.response?.data?.error || 'Erro ao deletar')
     }
   }
 

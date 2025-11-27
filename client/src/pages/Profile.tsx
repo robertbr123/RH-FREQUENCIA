@@ -45,9 +45,9 @@ export default function Profile() {
       await axios.put(`/api/users/${user?.id}`, formData, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      alert('Perfil atualizado com sucesso!')
+      toast.success('Perfil atualizado com sucesso!')
     } catch (error: any) {
-      alert(error.response?.data?.error || 'Erro ao atualizar perfil')
+      toast.error(error.response?.data?.error || 'Erro ao atualizar perfil')
     } finally {
       setLoading(false)
     }
@@ -57,12 +57,12 @@ export default function Profile() {
     e.preventDefault()
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      alert('As senhas não coincidem')
+      toast.error('As senhas não coincidem')
       return
     }
 
     if (passwordData.newPassword.length < 6) {
-      alert('A senha deve ter no mínimo 6 caracteres')
+      toast.error('A senha deve ter no mínimo 6 caracteres')
       return
     }
 

@@ -89,6 +89,10 @@ export default function Dashboard() {
   })
   const [loading, setLoading] = useState(true)
   const [animateNumbers, setAnimateNumbers] = useState(false)
+  const [selectedStat, setSelectedStat] = useState<string | null>(null)
+  const [topPerformers, setTopPerformers] = useState<Array<{name: string; rate: number; badge: string; streak: number}>>([])  
+  const [lowAttendance, setLowAttendance] = useState<Array<{name: string; rate: number; days_absent: number}>>([])  
+  const [attendanceGoal] = useState(95) // Meta de 95% de presença
 
   useEffect(() => {
     loadDashboardData()
@@ -336,6 +340,43 @@ export default function Dashboard() {
       const vacationsData = vacationsRes.data || []
       console.log('🏖️ Férias encontradas:', vacationsData.length)
       setVacations(vacationsData)
+
+      // Calcular Top 5 Performers
+      const performanceList = Array.from(employeeAttendanceMap.entries())
+        .map(([id, data]) => {
+          const rate = Math.round((data.count / workingDays) * 100)
+          let badge = ''
+          if (rate === 100) badge = '🏆 Perfeito'
+          else if (rate >= 95) badge = '⭐ Excelente'
+          else if (rate >= 85) badge = '👍 Muito Bom'
+          else if (rate >= 75) badge = '✅ Bom'
+          return {
+            name: data.name,
+            rate,
+            badge,
+            streak: data.count // Dias consecutivos (simplificado)
+          }
+        })
+        .sort((a, b) => b.rate - a.rate)
+        .slice(0, 5)
+      
+      setTopPerformers(performanceList)
+
+      // Identificar funcionários com baixa frequência (abaixo de 70%)
+      const lowPerformers = Array.from(employeeAttendanceMap.entries())
+        .map(([id, data]) => {
+          const rate = Math.round((data.count / workingDays) * 100)
+          return {
+            name: data.name,
+            rate,
+            days_absent: workingDays - data.count
+          }
+        })
+        .filter(emp => emp.rate < 70)
+        .sort((a, b) => a.rate - b.rate)
+        .slice(0, 5)
+      
+      setLowAttendance(lowPerformers)
     } catch (error) {
       console.error('Erro ao carregar dados:', error)
     } finally {
@@ -407,7 +448,14 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="relative animate-fade-in">
+      {/* Background com formas flutuantes glassmorphism */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+        <div className="absolute top-20 left-10 w-96 h-96 bg-gradient-to-br from-indigo-400/20 via-blue-400/20 to-cyan-400/20 rounded-full blur-3xl animate-float"></div>
+        <div className="absolute top-40 right-20 w-[500px] h-[500px] bg-gradient-to-br from-blue-400/15 via-cyan-400/15 to-indigo-400/15 rounded-full blur-3xl animate-float-delayed"></div>
+        <div className="absolute bottom-20 left-1/3 w-80 h-80 bg-gradient-to-br from-cyan-400/20 via-indigo-400/20 to-blue-400/20 rounded-full blur-3xl animate-float-slow"></div>
+      </div>
+
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
@@ -416,18 +464,19 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Stats Grid com gradientes e animações */}
+      {/* Stats Grid com glassmorphism e animações */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         {statCards.map((stat, index) => (
           <div 
-            key={stat.title} 
-            className="group bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 overflow-hidden"
+            key={stat.title}
+            onClick={() => setSelectedStat(stat.title)}
+            className="group backdrop-blur-xl bg-white/80 dark:bg-gray-800/80 rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 hover:scale-105 overflow-hidden cursor-pointer border border-white/30 dark:border-gray-700/30"
             style={{ animationDelay: `${index * 100}ms` }}
           >
-            <div className={`h-1 bg-gradient-to-r ${stat.gradient}`}></div>
-            <div className="p-6">
+            <div className={`h-2 bg-gradient-to-r ${stat.gradient}`}></div>
+            <div className="p-6 backdrop-blur-sm">
               <div className="flex items-center justify-between mb-4">
-                <div className={`${stat.bgLight} dark:bg-opacity-10 p-3 rounded-lg group-hover:scale-110 transition-transform duration-300`}>
+                <div className={`backdrop-blur-xl ${stat.bgLight} dark:bg-opacity-20 p-3 rounded-xl group-hover:scale-110 group-hover:rotate-6 transition-all duration-300 border border-white/30 shadow-lg`}>
                   <stat.icon className={`w-6 h-6 ${stat.textColor} dark:text-white`} />
                 </div>
                 {stat.change !== null && stat.change !== 0 && (
@@ -449,6 +498,66 @@ export default function Dashboard() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Meta de Presença Mensal */}
+      <div className="mb-8 backdrop-blur-xl bg-gradient-to-r from-indigo-50/80 via-blue-50/80 to-cyan-50/80 dark:from-indigo-900/30 dark:via-blue-900/30 dark:to-cyan-900/30 rounded-2xl shadow-lg p-6 border border-white/30 dark:border-gray-700/30">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="backdrop-blur-xl bg-gradient-to-br from-indigo-500/90 via-blue-500/90 to-cyan-500/90 p-3 rounded-xl shadow-lg">
+              <TrendingUp className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-cyan-600 bg-clip-text text-transparent">Meta de Presença Mensal</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Objetivo: {attendanceGoal}% de frequência</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className={`text-3xl font-bold ${
+              stats.monthAttendanceRate >= attendanceGoal 
+                ? 'text-green-600 dark:text-green-400' 
+                : stats.monthAttendanceRate >= attendanceGoal - 5
+                ? 'text-yellow-600 dark:text-yellow-400'
+                : 'text-red-600 dark:text-red-400'
+            }`}>
+              {stats.monthAttendanceRate}%
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {stats.monthAttendanceRate >= attendanceGoal ? '✅ Meta atingida!' : `📊 Faltam ${attendanceGoal - stats.monthAttendanceRate}%`}
+            </p>
+          </div>
+        </div>
+        
+        {/* Barra de Progresso da Meta */}
+        <div className="relative w-full h-6 backdrop-blur-xl bg-gray-200/50 dark:bg-gray-700/50 rounded-full overflow-hidden border border-white/30">
+          <div 
+            className={`h-full rounded-full transition-all duration-1000 ease-out relative overflow-hidden ${
+              stats.monthAttendanceRate >= attendanceGoal 
+                ? 'bg-gradient-to-r from-green-500 via-emerald-500 to-green-600' 
+                : stats.monthAttendanceRate >= attendanceGoal - 5
+                ? 'bg-gradient-to-r from-yellow-500 via-amber-500 to-yellow-600'
+                : 'bg-gradient-to-r from-red-500 via-rose-500 to-red-600'
+            }`}
+            style={{ width: `${Math.min(stats.monthAttendanceRate, 100)}%` }}
+          >
+            <div className="absolute inset-0 bg-white/30 animate-pulse"></div>
+          </div>
+          {/* Linha da Meta */}
+          <div 
+            className="absolute top-0 bottom-0 w-1 bg-white shadow-lg"
+            style={{ left: `${attendanceGoal}%` }}
+          >
+            <div className="absolute -top-1 left-1/2 -translate-x-1/2 bg-white text-gray-700 text-xs font-bold px-2 py-0.5 rounded shadow-lg whitespace-nowrap">
+              Meta: {attendanceGoal}%
+            </div>
+          </div>
+        </div>
+        
+        <div className="flex justify-between items-center mt-3 text-xs text-gray-600 dark:text-gray-400">
+          <span>0%</span>
+          <span className="font-semibold">{stats.monthAttendanceRate >= attendanceGoal ? '🎉 Parabéns!' : '💪 Continue assim!'}</span>
+          <span>100%</span>
+        </div>
       </div>
 
       {/* Métricas Adicionais - Nova Seção */}
@@ -488,10 +597,130 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Alertas e Notificações */}
+      {lowAttendance.length > 0 && (
+        <div className="mb-8 backdrop-blur-xl bg-gradient-to-r from-red-50/80 via-orange-50/80 to-yellow-50/80 dark:from-red-900/20 dark:via-orange-900/20 dark:to-yellow-900/20 rounded-2xl shadow-lg p-6 border-2 border-red-200/50 dark:border-red-700/30">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="backdrop-blur-xl bg-red-500/90 p-3 rounded-xl shadow-lg animate-pulse">
+              <XCircle className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-red-700 dark:text-red-400">⚠️ Atenção Necessária</h3>
+              <p className="text-sm text-red-600 dark:text-red-500">Funcionários com baixa frequência (abaixo de 70%)</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {lowAttendance.map((emp, index) => (
+              <div 
+                key={index}
+                className="backdrop-blur-xl bg-white/70 dark:bg-gray-800/70 p-4 rounded-xl border border-red-200/50 dark:border-red-700/30 hover:shadow-lg transition-all duration-300"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-semibold text-gray-900 dark:text-white truncate flex-1">{emp.name}</p>
+                  <span className="bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full ml-2">
+                    {emp.rate}%
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                  <XCircle className="w-3 h-3" />
+                  <span>{emp.days_absent} {emp.days_absent === 1 ? 'falta' : 'faltas'} este mês</span>
+                </div>
+                <div className="mt-2 w-full bg-red-100 dark:bg-red-900/30 rounded-full h-2">
+                  <div 
+                    className="h-full bg-gradient-to-r from-red-600 to-red-500 rounded-full"
+                    style={{ width: `${emp.rate}%` }}
+                  ></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Top 5 Funcionários com Badges */}
+      {topPerformers.length > 0 && (
+        <div className="mb-8 backdrop-blur-xl bg-gradient-to-r from-yellow-50/80 via-amber-50/80 to-orange-50/80 dark:from-yellow-900/20 dark:via-amber-900/20 dark:to-orange-900/20 rounded-2xl shadow-lg p-6 border-2 border-yellow-200/50 dark:border-yellow-700/30">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="backdrop-blur-xl bg-gradient-to-br from-yellow-500 via-amber-500 to-orange-500 p-3 rounded-xl shadow-lg animate-pulse">
+              <Award className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold bg-gradient-to-r from-yellow-700 to-orange-700 bg-clip-text text-transparent">🏆 Top 5 Funcionários do Mês</h3>
+              <p className="text-sm text-yellow-700 dark:text-yellow-500">Maiores taxas de presença</p>
+            </div>
+          </div>
+          
+          <div className="space-y-3">
+            {topPerformers.map((performer, index) => {
+              const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣']
+              const gradients = [
+                'from-yellow-100 to-amber-100 dark:from-yellow-900/30 dark:to-amber-900/30 border-yellow-400',
+                'from-gray-100 to-slate-100 dark:from-gray-700 dark:to-slate-700 border-gray-400',
+                'from-orange-100 to-amber-100 dark:from-orange-900/30 dark:to-amber-900/30 border-orange-400',
+                'from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border-blue-300',
+                'from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 border-purple-300'
+              ]
+              
+              return (
+                <div 
+                  key={index}
+                  className={`backdrop-blur-xl bg-gradient-to-r ${gradients[index]} p-4 rounded-xl border-2 hover:shadow-xl transition-all duration-300 transform hover:scale-102`}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="text-4xl">{medals[index]}</div>
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="font-bold text-gray-900 dark:text-white truncate text-lg">{performer.name}</p>
+                        <span className="bg-gradient-to-r from-indigo-500 to-cyan-500 text-white text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap">
+                          {performer.badge}
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-3 text-xs text-gray-600 dark:text-gray-400">
+                        <span className="flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3 text-green-600" />
+                          {performer.streak} dias presentes
+                        </span>
+                      </div>
+                      
+                      <div className="mt-2 w-full bg-white/50 dark:bg-gray-700/50 rounded-full h-2 backdrop-blur-sm">
+                        <div 
+                          className={`h-full rounded-full transition-all duration-700 ${
+                            performer.rate === 100 ? 'bg-gradient-to-r from-green-500 via-emerald-500 to-green-600' :
+                            performer.rate >= 95 ? 'bg-gradient-to-r from-blue-500 via-cyan-500 to-blue-600' :
+                            'bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600'
+                          }`}
+                          style={{ width: `${performer.rate}%` }}
+                        >
+                          <div className="h-full w-full animate-pulse opacity-50 bg-white rounded-full"></div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="text-right">
+                      <div className={`text-3xl font-bold ${
+                        performer.rate === 100 ? 'text-green-600 dark:text-green-400' :
+                        performer.rate >= 95 ? 'text-blue-600 dark:text-blue-400' :
+                        'text-indigo-600 dark:text-indigo-400'
+                      }`}>
+                        {performer.rate}%
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">presença</div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Department Stats & Recent Attendance Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         {/* Department Stats com Ranking e Tendências */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+        <div className="backdrop-blur-xl bg-white/80 dark:bg-gray-800/80 rounded-2xl shadow-lg p-6 border border-white/30 dark:border-gray-700/30">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Building2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
@@ -594,14 +823,14 @@ export default function Dashboard() {
         </div>
 
         {/* Quick Stats */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+        <div className="backdrop-blur-xl bg-white/80 dark:bg-gray-800/80 rounded-2xl shadow-lg p-6 border border-white/30 dark:border-gray-700/30">
           <div className="flex items-center gap-2 mb-4">
             <Clock className="w-5 h-5 text-gray-700 dark:text-gray-300" />
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">Resumo Rápido</h2>
           </div>
           
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 bg-green-50 rounded-lg">
+            <div className="flex items-center justify-between p-4 backdrop-blur-xl bg-green-50/80 dark:bg-green-900/20 rounded-xl border border-green-200/50 dark:border-green-700/30 shadow-sm">
               <div className="flex items-center gap-3">
                 <div className="bg-green-500 p-2 rounded-lg">
                   <CheckCircle className="w-5 h-5 text-white" />
@@ -616,7 +845,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-yellow-50 rounded-lg">
+            <div className="flex items-center justify-between p-4 backdrop-blur-xl bg-yellow-50/80 dark:bg-yellow-900/20 rounded-xl border border-yellow-200/50 dark:border-yellow-700/30 shadow-sm">
               <div className="flex items-center gap-3">
                 <div className="bg-yellow-500 p-2 rounded-lg">
                   <Clock className="w-5 h-5 text-white" />
@@ -631,7 +860,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-red-50 rounded-lg">
+            <div className="flex items-center justify-between p-4 backdrop-blur-xl bg-red-50/80 dark:bg-red-900/20 rounded-xl border border-red-200/50 dark:border-red-700/30 shadow-sm">
               <div className="flex items-center gap-3">
                 <div className="bg-red-500 p-2 rounded-lg">
                   <XCircle className="w-5 h-5 text-white" />
@@ -863,7 +1092,7 @@ export default function Dashboard() {
       )}
 
       {/* Recent Attendance */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
+      <div className="backdrop-blur-xl bg-white/80 dark:bg-gray-800/80 rounded-2xl shadow-lg p-6 border border-white/30 dark:border-gray-700/30">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Últimos Registros de Hoje</h2>
         
         {recentAttendance.length === 0 ? (
@@ -918,6 +1147,118 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* Modal de Detalhes do Card */}
+      {selectedStat && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
+          onClick={() => setSelectedStat(null)}
+        >
+          <div 
+            className="backdrop-blur-2xl bg-white/90 dark:bg-gray-800/90 rounded-3xl max-w-2xl w-full p-8 shadow-2xl border border-white/30 dark:border-gray-700/30 transform transition-all"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-cyan-600 bg-clip-text text-transparent">
+                {selectedStat}
+              </h2>
+              <button
+                onClick={() => setSelectedStat(null)}
+                className="p-2 backdrop-blur-xl bg-white/50 dark:bg-gray-700/50 hover:bg-white/70 rounded-xl transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {selectedStat === 'Total de Funcionários' && (
+                <>
+                  <div className="backdrop-blur-xl bg-gradient-to-r from-blue-50/80 to-indigo-50/80 dark:from-blue-900/20 dark:to-indigo-900/20 p-6 rounded-2xl border border-blue-200/50">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Total Geral</p>
+                    <p className="text-4xl font-bold text-gray-900 dark:text-white">{stats.totalEmployees}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="backdrop-blur-xl bg-green-50/80 dark:bg-green-900/20 p-4 rounded-xl border border-green-200/50">
+                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Ativos</p>
+                      <p className="text-2xl font-bold text-green-600 dark:text-green-400">{stats.activeEmployees}</p>
+                    </div>
+                    <div className="backdrop-blur-xl bg-red-50/80 dark:bg-red-900/20 p-4 rounded-xl border border-red-200/50">
+                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Inativos</p>
+                      <p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats.inactiveEmployees}</p>
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {selectedStat === 'Presentes Hoje' && (
+                <>
+                  <div className="backdrop-blur-xl bg-gradient-to-r from-green-50/80 to-emerald-50/80 dark:from-green-900/20 dark:to-emerald-900/20 p-6 rounded-2xl border border-green-200/50">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Total Presentes</p>
+                    <p className="text-4xl font-bold text-gray-900 dark:text-white">{stats.todayPresent}</p>
+                  </div>
+                  <div className="backdrop-blur-xl bg-blue-50/80 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200/50">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-gray-600 dark:text-gray-400">Pontuais (antes 08:30)</p>
+                      <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{stats.onTimeToday}</p>
+                    </div>
+                  </div>
+                  <div className="backdrop-blur-xl bg-yellow-50/80 dark:bg-yellow-900/20 p-4 rounded-xl border border-yellow-200/50">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-gray-600 dark:text-gray-400">Atrasados (após 08:30)</p>
+                      <p className="text-xl font-bold text-yellow-600 dark:text-yellow-400">{stats.lateToday}</p>
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {selectedStat === 'Ausentes Hoje' && (
+                <>
+                  <div className="backdrop-blur-xl bg-gradient-to-r from-red-50/80 to-orange-50/80 dark:from-red-900/20 dark:to-orange-900/20 p-6 rounded-2xl border border-red-200/50">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Total Ausentes</p>
+                    <p className="text-4xl font-bold text-gray-900 dark:text-white">{stats.todayAbsent}</p>
+                  </div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Funcionários ativos que não registraram ponto hoje</p>
+                </>
+              )}
+              
+              {selectedStat === 'Taxa Mensal' && (
+                <>
+                  <div className="backdrop-blur-xl bg-gradient-to-r from-purple-50/80 to-indigo-50/80 dark:from-purple-900/20 dark:to-indigo-900/20 p-6 rounded-2xl border border-purple-200/50">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Taxa de Frequência</p>
+                    <p className="text-4xl font-bold text-gray-900 dark:text-white">{stats.monthAttendanceRate}%</p>
+                  </div>
+                  <div className="backdrop-blur-xl bg-white/80 dark:bg-gray-700/80 p-4 rounded-xl border border-gray-200/50">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Progresso da Meta ({attendanceGoal}%)</p>
+                    <div className="relative w-full h-4 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 rounded-full transition-all duration-700"
+                        style={{ width: `${Math.min(stats.monthAttendanceRate, 100)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                  {monthlyComparison.percentChange !== 0 && (
+                    <div className={`backdrop-blur-xl p-4 rounded-xl border ${
+                      monthlyComparison.percentChange > 0 
+                        ? 'bg-green-50/80 dark:bg-green-900/20 border-green-200/50' 
+                        : 'bg-red-50/80 dark:bg-red-900/20 border-red-200/50'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        {monthlyComparison.percentChange > 0 ? <ArrowUp className="w-5 h-5 text-green-600" /> : <ArrowDown className="w-5 h-5 text-red-600" />}
+                        <span className={`font-bold ${
+                          monthlyComparison.percentChange > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                        }`}>
+                          {Math.abs(monthlyComparison.percentChange)}% {monthlyComparison.percentChange > 0 ? 'aumento' : 'redução'}
+                        </span>
+                        <span className="text-sm text-gray-600 dark:text-gray-400">vs mês anterior</span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -19,6 +19,7 @@ const Reports = lazy(() => import('./pages/Reports'))
 const Scanner = lazy(() => import('./pages/Scanner'))
 const EmployeeCheck = lazy(() => import('./pages/EmployeeCheck'))
 const AttendanceAdmin = lazy(() => import('./pages/AttendanceAdmin'))
+const Backup = lazy(() => import('./pages/Backup'))
 
 function PrivateRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: string[] }) {
   const { isAuthenticated, user } = useAuth()
@@ -97,6 +98,11 @@ function App() {
                     <Route path="/attendance-admin" element={
                       <PrivateRoute allowedRoles={['admin']}>
                         <AttendanceAdmin />
+                      </PrivateRoute>
+                    } />
+                    <Route path="/backup" element={
+                      <PrivateRoute allowedRoles={['admin']}>
+                        <Backup />
                       </PrivateRoute>
                     } />
                     <Route path="/scanner" element={

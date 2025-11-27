@@ -11,15 +11,29 @@ import usersRoutes from './routes/users.js';
 import settingsRoutes from './routes/settings.js';
 import migrateHolidaysRoutes from './routes/migrate-holidays.js';
 import absencesRoutes from './routes/absences.js';
+import backupRoutes from './routes/backup.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
-
+// fim Carregar variáveis de ambiente
 const app = express();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Aumentar limite para descriptors faciais
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Middleware para tratar erros de JSON parsing
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('❌ Erro ao parsear JSON:', err.message);
+    return res.status(400).json({ 
+      error: 'JSON inválido no body da requisição',
+      details: err.message 
+    });
+  }
+  next(err);
+});
 
 // Log de requisições em produção
 if (process.env.NODE_ENV === 'production') {
@@ -46,8 +60,13 @@ const initDB = async () => {
 
 // Initialize on first request
 app.use(async (req, res, next) => {
-  await initDB();
-  next();
+  try {
+    await initDB();
+    next();
+  } catch (err) {
+    console.error('Erro ao inicializar DB:', err);
+    next(err);
+  }
 });
 
 // Routes
@@ -60,6 +79,7 @@ app.use('/api/employee-card', employeeCardRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/migrate-holidays', migrateHolidaysRoutes);
 app.use('/api/absences', absencesRoutes);
+app.use('/api/backup', backupRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -323,13 +343,10 @@ app.use((req, res) => {
 // Export for Vercel
 export default app;
 
-// Start server (for Docker and local development)
-// Only skip if explicitly running in Vercel serverless environment
-if (!process.env.VERCEL) {
+// For local development
+if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    console.log(`📊 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
   });
 }

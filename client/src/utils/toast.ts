@@ -15,8 +15,24 @@ class ToastManager {
   private ensureContainer() {
     if (!this.container) {
       this.container = document.createElement('div')
-      this.container.className = 'fixed top-4 right-4 z-50 flex flex-col gap-2'
+      // Verificar se está em fullscreen/tablet mode
+      const isFullscreen = document.fullscreenElement !== null
+      if (isFullscreen) {
+        this.container.className = 'fixed top-20 right-4 z-[100] flex flex-col gap-2 max-w-md'
+      } else {
+        this.container.className = 'fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-md'
+      }
       document.body.appendChild(this.container)
+      
+      // Atualizar posição quando entrar/sair de fullscreen
+      document.addEventListener('fullscreenchange', () => {
+        if (this.container) {
+          const isFS = document.fullscreenElement !== null
+          this.container.className = isFS 
+            ? 'fixed top-20 right-4 z-[100] flex flex-col gap-2 max-w-md'
+            : 'fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-md'
+        }
+      })
     }
   }
 

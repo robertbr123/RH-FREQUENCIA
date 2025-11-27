@@ -7,27 +7,22 @@ dotenv.config();
 
 const { Pool } = pg;
 
-// Detectar se está usando banco local ou cloud (Neon/Vercel)
-const isLocalDB = process.env.DATABASE_URL?.includes('localhost') || 
-                  process.env.DATABASE_URL?.includes('127.0.0.1') ||
-                  process.env.DATABASE_URL?.includes('db:5432'); // Docker
-
-// Configuração otimizada para produção e desenvolvimento
+// Configuração otimizada para Vercel Serverless
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: isLocalDB ? false : {
+  ssl: {
     rejectUnauthorized: false
   },
-  // Configurações otimizadas
-  max: 10,
+  // Configurações otimizadas para serverless
+  max: 10, // Reduzido para serverless
   idleTimeoutMillis: 20000, // 20 segundos
   connectionTimeoutMillis: 5000, // 5 segundos
-  allowExitOnIdle: !isLocalDB // Apenas em serverless
+  allowExitOnIdle: true // Permite encerrar conexões idle em serverless
 });
 
 // Testar conexão
 pool.on('connect', () => {
-  console.log(`✅ Conectado ao PostgreSQL ${isLocalDB ? '(Local/Docker)' : '(Cloud/Neon)'}`);
+  console.log('✅ Conectado ao Neon PostgreSQL');
 });
 
 pool.on('error', (err) => {
@@ -55,6 +50,7 @@ export const initDatabase = async () => {
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) UNIQUE,
         role VARCHAR(50) DEFAULT 'operador' CHECK (role IN ('admin', 'gestor', 'operador')),
+        department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
         status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
@@ -116,6 +112,19 @@ export const initDatabase = async () => {
         company_address TEXT,
         company_phone VARCHAR(20),
         company_email VARCHAR(255),
+        timezone VARCHAR(50) DEFAULT 'America/Sao_Paulo',
+        date_format VARCHAR(20) DEFAULT 'dd/MM/yyyy',
+        time_format VARCHAR(10) DEFAULT '24h',
+        language VARCHAR(10) DEFAULT 'pt-BR',
+        attendance_tolerance_minutes INTEGER DEFAULT 5,
+        max_daily_hours INTEGER DEFAULT 12,
+        enable_facial_recognition BOOLEAN DEFAULT true,
+        enable_qr_scanner BOOLEAN DEFAULT true,
+        require_photo BOOLEAN DEFAULT false,
+        enable_notifications BOOLEAN DEFAULT true,
+        enable_email_notifications BOOLEAN DEFAULT false,
+        auto_backup_enabled BOOLEAN DEFAULT false,
+        backup_frequency_days INTEGER DEFAULT 7,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )

@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import axios from 'axios'
 import { Html5Qrcode } from 'html5-qrcode'
-import { Camera, CheckCircle, XCircle, Clock, User, Maximize, Minimize } from 'lucide-react'
+import { Camera, User, Maximize, Minimize, Scan, UserCheck } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { toast } from '../utils/toast'
-import { getErrorMessage } from '../utils/errorMessages'
+import FaceRecognition from '../components/FaceRecognition'
+import ScanResultDisplay from '../components/ScanResultDisplay'
 
 interface ScanResult {
   success: boolean
@@ -26,8 +27,19 @@ interface ScanResult {
   }
 }
 
+// Constantes de timeout
+const TIMEOUTS = {
+  DEBOUNCE_FACE: 3000,
+  SUCCESS_DISPLAY: 5000,
+  ERROR_DISPLAY_QR: 3000,
+  ERROR_DISPLAY_FACE: 7000,
+  QR_ERROR_CLEAR: 3000,
+} as const
+
 export default function Scanner() {
+  const [scanMode, setScanMode] = useState<'qr' | 'face'>('qr') // Novo: modo de scanner
   const [scanning, setScanning] = useState(false)
+  const [faceScanning, setFaceScanning] = useState(false) // Estado separado para reconhecimento facial
   const [result, setResult] = useState<ScanResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scannerRef = useRef<Html5Qrcode | null>(null)
@@ -37,8 +49,12 @@ export default function Scanner() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const containerRef = useRef<HTMLDivElement>(null)
+  const [faceDescriptor, setFaceDescriptor] = useState<Float32Array | null>(null)
+  const [verifyingFace, setVerifyingFace] = useState(false)
+  const isProcessingFace = useRef(false) // Controle adicional para evitar múltiplas chamadas
+  const lastFaceDetectionTime = useRef(0) // Timestamp da última detecção
 
-  // Helper para reproduzir som de votação com síntese de áudio
+  // Helper som para reproduzir som de votação com síntese de áudio
   const playSuccessSound = () => {
     try {
       // Criar áudio com síntese em tempo real (mais confiável)
@@ -49,7 +65,7 @@ export default function Scanner() {
         audioContext.resume()
       }
       
-      // Criar sequência de beeps (som tipo votação)
+      // Criar uma, sequência de beeps (som tipo votação)
       const now = audioContext.currentTime
       const beepDuration = 0.15
       const gapDuration = 0.05
@@ -84,7 +100,7 @@ export default function Scanner() {
     oscillator.stop(startTime + duration)
   }
 
-  // Monitorar conexão online/offline
+  // Monitorar on/off conexão online/offline
   useEffect(() => {
     const handleOnline = () => setIsOnline(true)
     const handleOffline = () => setIsOnline(false)
@@ -98,8 +114,8 @@ export default function Scanner() {
     }
   }, [])
 
-  // Helper to translate punch types
-  const getPunchTypeLabel = (type: string) => {
+  // Helper to translate punch types erros
+  const getPunchTypeLabel = useMemo(() => (type: string) => {
     const labels: Record<string, string> = {
       entry: 'Entrada',
       break_start: 'Início do Intervalo',
@@ -107,10 +123,10 @@ export default function Scanner() {
       exit: 'Saída'
     }
     return labels[type] || type
-  }
+  }, [])
 
   // Helper to get color classes based on punch type
-  const getPunchTypeColors = (type: string) => {
+  const getPunchTypeColors = useMemo(() => (type: string) => {
     const colors: Record<string, { bg: string; border: string; text: string; icon: string }> = {
       entry: {
         bg: 'bg-green-50',
@@ -143,7 +159,7 @@ export default function Scanner() {
       text: 'text-gray-900',
       icon: 'text-gray-600'
     }
-  }
+  }, [])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -273,7 +289,7 @@ export default function Scanner() {
       
       if (!qrData.id || !qrData.cpf) {
         setError('QR Code inválido. Deve conter ID e CPF do funcionário.')
-        setTimeout(() => setError(null), 3000)
+        const errorTimer = setTimeout(() => setError(null), TIMEOUTS.QR_ERROR_CLEAR)
         return
       }
 
@@ -316,7 +332,7 @@ export default function Scanner() {
       setTimeout(() => {
         setResult(null)
         startScanner()
-      }, 5000)
+      }, TIMEOUTS.SUCCESS_DISPLAY)
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || 'Erro ao registrar ponto'
       
@@ -328,17 +344,152 @@ export default function Scanner() {
       // Toast com erro
       toast.error(errorMessage)
 
-      // Reiniciar scanner após 3 segundos
+      // Reiniciar scanner após erro
       setTimeout(() => {
         setResult(null)
         startScanner()
-      }, 3000)
+      }, TIMEOUTS.ERROR_DISPLAY_QR)
     }
   }
 
   const onScanError = (_errorMessage: string) => {
     // Silenciar erros normais de scan (quando não detecta QR code)
     // Esses erros são esperados durante a varredura contínua
+  }
+
+  // Função para verificar face e registrar ponto
+  const handleFaceDetected = async (descriptor: Float32Array) => {
+    // Verificar se já está processando ou se passou menos de 3 segundos desde a última detecção
+    const now = Date.now()
+    const timeSinceLastDetection = now - lastFaceDetectionTime.current
+    
+    if (isProcessingFace.current || verifyingFace || timeSinceLastDetection < TIMEOUTS.DEBOUNCE_FACE) {
+      console.log('⏭️ Ignorando detecção facial (ainda processando ou muito recente)')
+      return
+    }
+    
+    // Marcar como processando
+    isProcessingFace.current = true
+    lastFaceDetectionTime.current = now
+    setVerifyingFace(true)
+    setFaceDescriptor(descriptor)
+
+    try {
+      const token = localStorage.getItem('token')
+      
+      console.log('=== RECONHECIMENTO FACIAL ===')
+      console.log('Descriptor capturado:', {
+        length: descriptor.length,
+        type: descriptor.constructor.name,
+        primeiros5valores: Array.from(descriptor).slice(0, 5)
+      })
+      
+      // Enviar descriptor para API verificar
+      console.log('Enviando para /api/attendance/face-verify...')
+      const response = await axios.post(
+        '/api/attendance/face-verify',
+        { 
+          faceDescriptor: Array.from(descriptor) // Converter Float32Array para Array
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+
+      console.log('✅ Resposta da verificação:', response.data)
+
+      // Se verificação bem-sucedida, registrar ponto
+      if (response.data.verified && response.data.employee) {
+        console.log('✅ Face verificada! Registrando ponto...')
+        
+        const attendanceResponse = await axios.post(
+          '/api/attendance',
+          { employee_id: response.data.employee.id },
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+
+        console.log('✅ Ponto registrado:', attendanceResponse.data)
+
+        setResult({
+          success: true,
+          message: attendanceResponse.data.message || 'Ponto registrado com sucesso!',
+          punch_type: attendanceResponse.data.punch_type,
+          next_punch: attendanceResponse.data.next_punch,
+          employee: {
+            name: response.data.employee.name,
+            cpf: response.data.employee.cpf || '',
+          },
+          today_summary: attendanceResponse.data.today_summary,
+        })
+
+        playSuccessSound()
+        toast.success(`✅ ${response.data.employee.name} - Ponto registrado!`)
+
+        // Limpar resultado após 5 segundos
+        setTimeout(() => {
+          setResult(null)
+          setVerifyingFace(false)
+          isProcessingFace.current = false
+          setFaceScanning(false) // Parar reconhecimento facial após sucesso
+        }, TIMEOUTS.SUCCESS_DISPLAY)
+      } else {
+        throw new Error('Face não reconhecida - verified=false')
+      }
+    } catch (err: any) {
+      console.error('❌ Erro na verificação facial:', err)
+      console.error('Status:', err.response?.status)
+      console.error('Dados do erro:', err.response?.data)
+      
+      let errorMessage = '❌ Erro ao verificar face'
+      let errorDetails = ''
+      
+      if (err.response?.status === 404) {
+        errorMessage = err.response.data.error || 'Face não reconhecida'
+        errorDetails = err.response.data.hint || err.response.data.details || ''
+      } else if (err.response?.status === 400) {
+        errorMessage = 'Erro ao capturar face'
+        errorDetails = err.response.data.details || 'Tente posicionar melhor seu rosto'
+      } else if (err.response?.status === 500) {
+        errorMessage = 'Erro no servidor'
+        errorDetails = err.response.data.hint || 'Tente novamente'
+      } else if (err.message) {
+        errorMessage = err.message
+      }
+      
+      const fullMessage = errorDetails ? `${errorMessage}\n${errorDetails}` : errorMessage
+      
+      setResult({
+        success: false,
+        message: fullMessage,
+      })
+      
+      toast.error(fullMessage)
+
+      setTimeout(() => {
+        setResult(null)
+        setVerifyingFace(false)
+        isProcessingFace.current = false
+        setFaceScanning(false) // Parar reconhecimento facial após erro
+      }, TIMEOUTS.ERROR_DISPLAY_FACE)
+    }
+  }
+
+  const handleFaceError = (error: string) => {
+    setError(error)
+    toast.error(error)
+    setFaceScanning(false) // Parar reconhecimento facial em caso de erro
+  }
+
+  const startFaceScanning = () => {
+    setFaceScanning(true)
+    setResult(null)
+    setError(null)
+    isProcessingFace.current = false
+    lastFaceDetectionTime.current = 0
+  }
+
+  const stopFaceScanning = () => {
+    setFaceScanning(false)
+    setVerifyingFace(false)
+    isProcessingFace.current = false
   }
 
   const handleManualEntry = async (e: React.FormEvent) => {
@@ -383,7 +534,6 @@ export default function Scanner() {
         employee: {
           name: employee.name,
           cpf: employee.cpf || '',
-          type: employee.type || 'full-time',
         },
         today_summary: attendanceResponse.data.today_summary,
       })
@@ -400,7 +550,7 @@ export default function Scanner() {
       // Limpar resultado após 5 segundos
       setTimeout(() => {
         setResult(null)
-      }, 5000)
+      }, TIMEOUTS.SUCCESS_DISPLAY)
     } catch (err: any) {
       let errorMessage = 'Erro ao registrar ponto'
       if (err.response?.data?.error) {
@@ -419,7 +569,7 @@ export default function Scanner() {
 
       setTimeout(() => {
         setResult(null)
-      }, 5000)
+      }, TIMEOUTS.SUCCESS_DISPLAY)
     } finally {
       setLoadingManual(false)
     }
@@ -443,69 +593,114 @@ export default function Scanner() {
     >
       {/* Cabeçalho - esconde em tela cheia */}
       {!isFullscreen && (
-        <div className="mb-8">
+        <div className="mb-8 animate-fade-in">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-                <div className="p-3 bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl shadow-lg">
-                  <Camera className="w-8 h-8 text-white" />
+              <div className="flex items-center gap-4 mb-3">
+                <div className="p-4 bg-gradient-to-br from-primary-500 via-primary-600 to-purple-600 rounded-2xl shadow-2xl transform hover:scale-105 transition-transform duration-300">
+                  <Camera className="w-10 h-10 text-white" />
                 </div>
-                Scanner de Ponto
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-2">
-                Escaneie o QR Code do crachá do funcionário para registrar o ponto
+                <div>
+                  <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-primary-600 to-purple-600">
+                    Scanner de Ponto
+                  </h1>
+                  <div className="h-1 w-24 bg-gradient-to-r from-primary-500 to-purple-500 rounded-full mt-1"></div>
+                </div>
+              </div>
+              <p className="text-gray-600 dark:text-gray-400 text-lg ml-1">
+                🚀 Sistema inteligente de registro de ponto
               </p>
             </div>
-            {/* Status Online/Offline - REMOVIDO do header, será adicionado fixo no rodapé */}
           </div>
         </div>
       )}
 
-      {/* Botão de Tela Cheia */}
-      <div className="mb-4 flex justify-end">
+      {/* Controles superiores */}
+      <div className="mb-6 flex justify-between items-center gap-4 animate-slide-down">
+        {/* Toggle Modo Scanner */}
+        <div className="flex items-center gap-2 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 rounded-xl p-1.5 shadow-lg border-2 border-gray-200 dark:border-gray-700">
+          <button
+            onClick={() => { setScanMode('qr'); setResult(null); setError(null); }}
+            className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all duration-300 transform ${
+              scanMode === 'qr'
+                ? 'bg-gradient-to-r from-primary-600 to-primary-700 text-white shadow-xl scale-105'
+                : 'text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 hover:scale-105'
+            }`}
+          >
+            <Scan className="w-5 h-5" />
+            <span className="font-bold">QR Code</span>
+          </button>
+          <button
+            onClick={() => { setScanMode('face'); stopScanner(); setResult(null); setError(null); }}
+            className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all duration-300 transform ${
+              scanMode === 'face'
+                ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-xl scale-105'
+                : 'text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 hover:scale-105'
+            }`}
+          >
+            <UserCheck className="w-5 h-5" />
+            <span className="font-bold">Facial</span>
+          </button>
+        </div>
+
+        {/* Botão de Tela Cheia */}
         <button
           onClick={toggleFullscreen}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg transition-colors shadow-lg"
+          className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-800 hover:to-gray-900 text-white rounded-xl transition-all duration-300 shadow-xl hover:shadow-2xl transform hover:scale-105"
           title={isFullscreen ? 'Sair da tela cheia' : 'Entrar em tela cheia'}
         >
           {isFullscreen ? (
             <>
               <Minimize className="w-5 h-5" />
-              <span>Sair da Tela Cheia</span>
+              <span className="font-bold">Minimizar</span>
             </>
           ) : (
             <>
               <Maximize className="w-5 h-5" />
-              <span>Modo Tablet</span>
+              <span className="font-bold">Tablet</span>
             </>
           )}
         </button>
       </div>
 
       {/* Relógio */}
-      <div className="bg-gradient-to-br from-primary-500 to-primary-600 rounded-xl shadow-lg p-6 mb-6 text-white">
-        <div className="text-center">
-          <div className={`font-bold mb-2 ${isFullscreen ? 'text-8xl' : 'text-5xl'}`}>
-            {format(currentTime, 'HH:mm:ss')}
+      <div className="relative bg-gradient-to-br from-primary-500 via-primary-600 to-purple-600 rounded-2xl shadow-2xl p-8 mb-6 text-white overflow-hidden animate-fade-in">
+        {/* Efeito de brilho animado */}
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-10 animate-shimmer"></div>
+        
+        <div className="relative text-center">
+          <div className="mb-3">
+            <div className={`font-black tracking-tight mb-1 ${isFullscreen ? 'text-9xl' : 'text-6xl'} drop-shadow-2xl`}>
+              {format(currentTime, 'HH:mm:ss')}
+            </div>
+            <div className="h-2 w-32 bg-white/30 rounded-full mx-auto"></div>
           </div>
-          <div className={`opacity-90 ${isFullscreen ? 'text-3xl' : 'text-xl'}`}>
+          <div className={`font-semibold opacity-95 ${isFullscreen ? 'text-4xl' : 'text-2xl'} drop-shadow-lg`}>
             {format(currentTime, "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
           </div>
         </div>
       </div>
 
       {/* Scanner */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+      <div className="bg-gradient-to-br from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 rounded-2xl shadow-2xl border-2 border-gray-200 dark:border-gray-700 p-8 mb-6 animate-fade-in">
         <div className="flex flex-col items-center">
-          {!scanning && !result && (
-            <button
-              onClick={startScanner}
-              className="flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-primary-600 to-primary-700 text-white rounded-xl hover:from-primary-700 hover:to-primary-800 shadow-lg hover:shadow-xl transition-all duration-200 text-lg font-semibold"
-            >
-              <Camera className="w-6 h-6" />
-              Iniciar Scanner
-            </button>
-          )}
+          {/* Modo QR Code */}
+          {scanMode === 'qr' && (
+            <>
+              {!scanning && !result && (
+                <div className="text-center space-y-4">
+                  <div className="w-32 h-32 mx-auto bg-gradient-to-br from-primary-100 to-primary-200 dark:from-primary-900 dark:to-primary-800 rounded-3xl flex items-center justify-center mb-6 animate-pulse-slow">
+                    <Scan className="w-16 h-16 text-primary-600 dark:text-primary-300" />
+                  </div>
+                  <button
+                    onClick={startScanner}
+                    className="flex items-center gap-3 px-10 py-5 bg-gradient-to-r from-primary-600 via-primary-700 to-purple-600 text-white rounded-2xl hover:from-primary-700 hover:via-primary-800 hover:to-purple-700 shadow-2xl hover:shadow-3xl transition-all duration-300 text-xl font-bold transform hover:scale-105 animate-bounce-subtle"
+                  >
+                    <Camera className="w-7 h-7" />
+                    Iniciar Scanner QR
+                  </button>
+                </div>
+              )}
 
           {scanning && (
             <div className="w-full">
@@ -537,140 +732,12 @@ export default function Scanner() {
 
           {result && (
             <div className="w-full">
-              {(() => {
-                const colors = result.success && result.punch_type
-                  ? getPunchTypeColors(result.punch_type)
-                  : { bg: 'bg-red-50', border: 'border-red-500', text: 'text-red-900', icon: 'text-red-600' };
-
-                return (
-                  <div
-                    className={`p-6 rounded-xl ${result.success ? `${colors.bg} border-2 ${colors.border}` : 'bg-red-50 border-2 border-red-500'}`}
-                  >
-                    <div className="flex items-start gap-4">
-                      {result.success ? (
-                        <CheckCircle className={`w-12 h-12 ${colors.icon} flex-shrink-0`} />
-                      ) : (
-                        <XCircle className="w-12 h-12 text-red-600 flex-shrink-0" />
-                      )}
-                      <div className="flex-1">
-                        <h3
-                          className={`text-xl font-bold mb-2 ${result.success ? colors.text : 'text-red-900'}`}
-                        >
-                          {result.success 
-                            ? `${getPunchTypeLabel(result.punch_type || '')} Registrada!` 
-                            : 'Erro'
-                          }
-                        </h3>
-                        <p
-                          className={`text-lg mb-4 ${result.success ? colors.text : 'text-red-800'}`}
-                        >
-                          {result.message}
-                        </p>
-
-                    {result.next_punch && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-                        <p className="text-sm text-blue-900 font-medium">
-                          Próximo registro: {getPunchTypeLabel(result.next_punch)}
-                        </p>
-                      </div>
-                    )}
-
-                    {result.employee && (
-                      <div className="bg-white dark:bg-gray-800 rounded-lg p-4 mb-4">
-                        <div className="flex items-center gap-2 mb-3">
-                          <User className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Funcionário
-                          </span>
-                        </div>
-                        <div className="space-y-2 text-sm">
-                          <div>
-                            <span className="text-gray-600 dark:text-gray-400">Nome:</span>
-                            <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                              {result.employee.name}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-gray-600 dark:text-gray-400">CPF:</span>
-                            <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                              {result.employee.cpf}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-gray-600 dark:text-gray-400">Tipo:</span>
-                            <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                              {result.employee.type === 'full-time'
-                                ? 'Tempo Integral'
-                                : result.employee.type === 'part-time'
-                                ? 'Meio Período'
-                                : 'Temporário'}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {result.today_summary && (
-                      <div className="bg-white dark:bg-gray-800 rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-3">
-                          <Clock className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Resumo do Dia
-                          </span>
-                        </div>
-                        <div className="space-y-2 text-sm">
-                          {result.today_summary.entry && (
-                            <div>
-                              <span className="text-gray-600 dark:text-gray-400">Entrada:</span>
-                              <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                                {format(new Date(result.today_summary.entry), 'HH:mm:ss')}
-                              </span>
-                            </div>
-                          )}
-                          {result.today_summary.break_start && (
-                            <div>
-                              <span className="text-gray-600 dark:text-gray-400">Início Intervalo:</span>
-                              <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                                {format(new Date(result.today_summary.break_start), 'HH:mm:ss')}
-                              </span>
-                            </div>
-                          )}
-                          {result.today_summary.break_end && (
-                            <div>
-                              <span className="text-gray-600 dark:text-gray-400">Fim Intervalo:</span>
-                              <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                                {format(new Date(result.today_summary.break_end), 'HH:mm:ss')}
-                              </span>
-                            </div>
-                          )}
-                          {result.today_summary.exit && (
-                            <div>
-                              <span className="text-gray-600 dark:text-gray-400">Saída:</span>
-                              <span className="ml-2 font-medium text-gray-900 dark:text-white">
-                                {format(new Date(result.today_summary.exit), 'HH:mm:ss')}
-                              </span>
-                            </div>
-                          )}
-                          {result.today_summary.hours_worked !== undefined && (
-                            <div className="pt-2 mt-2 border-t border-gray-200 dark:border-gray-700">
-                              <span className="text-gray-600 dark:text-gray-400">Horas Trabalhadas:</span>
-                              <span className="ml-2 font-bold text-green-600">
-                                {result.today_summary.hours_worked.toFixed(2)}h
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-4">
-                      Reiniciando scanner automaticamente...
-                    </p>
-                  </div>
-                </div>
-              </div>
-                );
-              })()}
+              <ScanResultDisplay
+                result={result}
+                getPunchTypeLabel={getPunchTypeLabel}
+                getPunchTypeColors={getPunchTypeColors}
+                autoHideMessage="Reiniciando scanner automaticamente..."
+              />
             </div>
           )}
 
@@ -703,29 +770,123 @@ export default function Scanner() {
               <button
                 type="submit"
                 disabled={loadingManual || !manualInput.trim()}
-                className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold"
+                aria-label="Registrar ponto manualmente"
               >
                 <User className="w-6 h-6" />
-                <span className="text-lg font-semibold">
-                  {loadingManual ? 'Registrando...' : 'Registrar Ponto'}
-                </span>
+                {loadingManual ? 'Registrando...' : 'Registrar Ponto'}
               </button>
             </form>
           </div>
+            </>
+          )}
+
+          {/* Modo Reconhecimento Facial */}
+          {scanMode === 'face' && (
+            <div className="w-full">
+              {!faceScanning && !result && (
+                <div className="flex justify-center">
+                  <button
+                    onClick={startFaceScanning}
+                    className="flex items-center gap-3 px-10 py-5 bg-gradient-to-r from-purple-600 via-purple-700 to-indigo-600 text-white rounded-2xl hover:from-purple-700 hover:via-purple-800 hover:to-indigo-700 shadow-2xl hover:shadow-3xl transition-all duration-300 text-xl font-bold transform hover:scale-105"
+                  >
+                    <UserCheck className="w-7 h-7" />
+                    Iniciar Reconhecimento Facial
+                  </button>
+                </div>
+              )}
+
+              {faceScanning && !result && (
+                <div className="w-full space-y-4">
+                  <FaceRecognition
+                    mode="verify"
+                    onFaceDetected={handleFaceDetected}
+                    onError={handleFaceError}
+                  />
+                  
+                  {verifyingFace && (
+                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-center">
+                      <p className="text-blue-900 font-medium">Verificando identidade...</p>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={stopFaceScanning}
+                    className="w-full px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    Parar Reconhecimento
+                  </button>
+                </div>
+              )}
+
+              {result && (
+                <div className="w-full">
+                  <ScanResultDisplay
+                    result={result}
+                    getPunchTypeLabel={getPunchTypeLabel}
+                    getPunchTypeColors={getPunchTypeColors}
+                  />
+
+                  {!result.success && (
+                    <button
+                      onClick={() => {
+                        setResult(null)
+                        setError(null)
+                        setVerifyingFace(false)
+                        isProcessingFace.current = false
+                        setFaceScanning(false)
+                      }}
+                      className="w-full flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-r from-primary-600 to-primary-700 text-white rounded-xl hover:from-primary-700 hover:to-primary-800 shadow-lg hover:shadow-xl transition-all duration-200 text-lg font-semibold mt-4"
+                    >
+                      <UserCheck className="w-6 h-6" />
+                      Iniciar Novo Reconhecimento
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {error && !result && (
+                <div className="space-y-4">
+                  <div className="w-full p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
+                    {error}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setError(null)
+                      setFaceScanning(false)
+                    }}
+                    className="w-full px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    Tentar Novamente
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       {/* Instruções */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-        <h3 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
-          <Camera className="w-5 h-5" />
-          Como usar:
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border-2 border-blue-200 dark:border-blue-800 rounded-2xl p-6 shadow-lg">
+        <h3 className="font-bold text-xl text-blue-900 dark:text-blue-300 mb-4 flex items-center gap-3">
+          <div className="p-2 bg-blue-600 rounded-lg">
+            <Camera className="w-6 h-6 text-white" />
+          </div>
+          Como usar
         </h3>
-        <ol className="list-decimal list-inside space-y-2 text-blue-800">
-          <li>Clique em "Iniciar Scanner" para ativar a câmera e escanear o QR Code</li>
-          <li>Ou digite a matrícula ou CPF do funcionário no campo abaixo</li>
-          <li>O sistema registrará o ponto automaticamente</li>
-          <li>Verifique a confirmação com os dados do funcionário</li>
+        <ol className="space-y-3 text-blue-800 dark:text-blue-200">
+          <li className="flex items-start gap-3">
+            <span className="flex-shrink-0 w-7 h-7 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-sm">1</span>
+            <span>Clique em "Iniciar Scanner" para ativar a câmera</span>
+          </li>
+          <li className="flex items-start gap-3">
+            <span className="flex-shrink-0 w-7 h-7 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-sm">2</span>
+            <span>Ou use o reconhecimento facial ou digite matrícula/CPF</span>
+          </li>
+          <li className="flex items-start gap-3">
+            <span className="flex-shrink-0 w-7 h-7 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-sm">3</span>
+            <span>O sistema registra automaticamente e mostra confirmação</span>
+          </li>
         </ol>
       </div>
 
