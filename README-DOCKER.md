@@ -89,7 +89,7 @@ docker-compose -f docker-compose.dev.yml up -d
 ### Acessar logs em tempo real (dev)
 
 ```bash
-docker-compose -f docker-compose.dev.yml logs -f
+docker compose -f docker-compose.dev.yml logs -f
 ```
 
 ---
