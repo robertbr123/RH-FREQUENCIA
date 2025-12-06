@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react'
 import axios from 'axios'
 
 interface User {
@@ -17,6 +17,29 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+// Configurar interceptor UMA VEZ fora do componente
+let interceptorConfigured = false
+
+function setupAxiosInterceptor() {
+  if (interceptorConfigured) return
+  
+  axios.interceptors.request.use(
+    (config) => {
+      const token = localStorage.getItem('token')
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`
+      }
+      return config
+    },
+    (error) => Promise.reject(error)
+  )
+  
+  interceptorConfigured = true
+}
+
+// Configurar imediatamente
+setupAxiosInterceptor()
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -39,24 +62,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
     setLoading(false)
-  }, [])
-
-  // Interceptor para adicionar token em todas as requisições
-  useEffect(() => {
-    const interceptor = axios.interceptors.request.use(
-      (config) => {
-        const token = localStorage.getItem('token')
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`
-        }
-        return config
-      },
-      (error) => Promise.reject(error)
-    )
-
-    return () => {
-      axios.interceptors.request.eject(interceptor)
-    }
   }, [])
 
   const login = async (username: string, password: string) => {

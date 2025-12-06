@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Users as UsersIcon, Plus, Edit, Trash2, Lock, UserCheck, UserX, Shield, Mail, List, LayoutGrid } from 'lucide-react'
+import { Users as UsersIcon, Plus, Edit, Trash2, Lock, UserCheck, UserX, Shield, Mail, List, LayoutGrid, Building2, X, Check } from 'lucide-react'
 import ConfirmDialog from '../components/ConfirmDialog'
 import LoadingSpinner, { SkeletonTable } from '../components/LoadingSpinner'
 import { toast } from '../utils/toast'
@@ -13,6 +13,8 @@ interface User {
   email: string
   role: string
   department_id?: number
+  department_ids?: number[]
+  departments?: { id: number; name: string }[]
   status: string
   created_at: string
 }
@@ -303,6 +305,26 @@ export default function Users() {
                       {getRoleBadge(user.role)}
                     </div>
 
+                    {/* Departamentos do Gestor */}
+                    {user.role === 'gestor' && user.departments && user.departments.length > 0 && (
+                      <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
+                        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mb-2">
+                          <Building2 className="w-4 h-4" />
+                          <span className="text-sm font-medium">Departamentos:</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {user.departments.map((dept) => (
+                            <span
+                              key={dept.id}
+                              className="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded-md"
+                            >
+                              {dept.name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-gray-500 dark:text-gray-400">Status:</span>
                       <span
@@ -489,10 +511,22 @@ function UserModal({
     name: user?.name || '',
     email: user?.email || '',
     role: user?.role || 'operador',
-    department_id: user?.department_id || null,
+    department_ids: user?.department_ids || (user?.departments?.map(d => d.id) || []),
     status: user?.status || 'active',
   })
   const [loading, setLoading] = useState(false)
+
+  // Toggle departamento na seleção
+  const toggleDepartment = (deptId: number) => {
+    setFormData(prev => {
+      const currentIds = prev.department_ids || []
+      if (currentIds.includes(deptId)) {
+        return { ...prev, department_ids: currentIds.filter(id => id !== deptId) }
+      } else {
+        return { ...prev, department_ids: [...currentIds, deptId] }
+      }
+    })
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -502,16 +536,16 @@ function UserModal({
       const token = localStorage.getItem('token')
       const config = { headers: { Authorization: `Bearer ${token}` } }
 
-      // Validar se gestor tem departamento
-      if (formData.role === 'gestor' && !formData.department_id) {
-        toast.warning('Departamento é obrigatório para gestores')
+      // Validar se gestor tem pelo menos um departamento
+      if (formData.role === 'gestor' && formData.department_ids.length === 0) {
+        toast.warning('Selecione pelo menos um departamento para o gestor')
         setLoading(false)
         return
       }
 
       const submitData = {
         ...formData,
-        department_id: formData.department_id || null,
+        department_ids: formData.role === 'gestor' ? formData.department_ids : [],
       }
 
       if (user) {
@@ -539,10 +573,18 @@ function UserModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-bold mb-4">
-          {user ? 'Editar Usuário' : 'Novo Usuário'}
-        </h2>
+      <div className="bg-white dark:bg-gray-800 rounded-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+            {user ? 'Editar Usuário' : 'Novo Usuário'}
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -595,7 +637,7 @@ function UserModal({
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Nível de Acesso *</label>
             <select
               value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value, department_id: e.target.value !== 'gestor' ? null : formData.department_id })}
+              onChange={(e) => setFormData({ ...formData, role: e.target.value, department_ids: e.target.value !== 'gestor' ? [] : formData.department_ids })}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
               required
             >
@@ -607,25 +649,77 @@ function UserModal({
 
           {formData.role === 'gestor' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Departamento *
-                <span className="text-red-500">*</span>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Departamentos <span className="text-red-500">*</span>
               </label>
-              <select
-                value={formData.department_id || ''}
-                onChange={(e) => setFormData({ ...formData, department_id: e.target.value ? parseInt(e.target.value) : null })}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
-                required={formData.role === 'gestor'}
-              >
-                <option value="">Selecione um departamento</option>
-                {departments.map((dept) => (
-                  <option key={dept.id} value={dept.id}>
-                    {dept.name}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                O gestor terá acesso apenas aos funcionários deste departamento
+              <div className="border border-gray-300 dark:border-gray-600 rounded-lg p-3 max-h-48 overflow-y-auto bg-gray-50 dark:bg-gray-700/50">
+                {departments.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-2">
+                    Nenhum departamento cadastrado
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {departments.map((dept) => {
+                      const isSelected = formData.department_ids?.includes(dept.id)
+                      return (
+                        <label
+                          key={dept.id}
+                          className={`
+                            flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all
+                            ${isSelected 
+                              ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' 
+                              : 'hover:bg-gray-100 dark:hover:bg-gray-600 border border-transparent'
+                            }
+                          `}
+                        >
+                          <div className={`
+                            w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-colors
+                            ${isSelected 
+                              ? 'bg-blue-600 text-white' 
+                              : 'border-2 border-gray-300 dark:border-gray-500'
+                            }
+                          `}>
+                            {isSelected && <Check className="w-3 h-3" />}
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleDepartment(dept.id)}
+                            className="sr-only"
+                          />
+                          <span className={`text-sm ${isSelected ? 'font-medium text-blue-800 dark:text-blue-200' : 'text-gray-700 dark:text-gray-300'}`}>
+                            {dept.name}
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+              {formData.department_ids?.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {formData.department_ids.map(id => {
+                    const dept = departments.find(d => d.id === id)
+                    return dept ? (
+                      <span
+                        key={id}
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded-md"
+                      >
+                        {dept.name}
+                        <button
+                          type="button"
+                          onClick={() => toggleDepartment(id)}
+                          className="hover:text-blue-900 dark:hover:text-blue-100"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ) : null
+                  })}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                O gestor terá acesso aos funcionários dos departamentos selecionados
               </p>
             </div>
           )}

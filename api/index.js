@@ -12,6 +12,10 @@ import settingsRoutes from './routes/settings.js';
 import migrateHolidaysRoutes from './routes/migrate-holidays.js';
 import absencesRoutes from './routes/absences.js';
 import backupRoutes from './routes/backup.js';
+import locationsRoutes from './routes/locations.js';
+import permissionsRoutes from './routes/permissions.js';
+import employeePortalRoutes from './routes/employeePortal.js';
+import adminNotificationsRoutes from './routes/adminNotifications.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -43,30 +47,25 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Initialize database once
-let dbInitialized = false;
+// Initialize database once - usando cache do database.js
 const initDB = async () => {
-  if (!dbInitialized) {
-    try {
-      await initDatabase();
-      dbInitialized = true;
-      console.log('✅ Database initialized');
-    } catch (err) {
-      console.error('❌ Erro ao inicializar banco de dados:', err);
-      throw err;
-    }
+  try {
+    await initDatabase();
+    console.log('✅ Database initialized');
+  } catch (err) {
+    console.error('❌ Erro ao inicializar banco de dados:', err);
+    // Não lançar erro para não bloquear outras rotas
   }
 };
 
-// Initialize on first request
+// Inicializar apenas uma vez no startup (não em cada request)
+let dbInitStarted = false;
 app.use(async (req, res, next) => {
-  try {
+  if (!dbInitStarted) {
+    dbInitStarted = true;
     await initDB();
-    next();
-  } catch (err) {
-    console.error('Erro ao inicializar DB:', err);
-    next(err);
   }
+  next();
 });
 
 // Routes
@@ -80,6 +79,10 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/migrate-holidays', migrateHolidaysRoutes);
 app.use('/api/absences', absencesRoutes);
 app.use('/api/backup', backupRoutes);
+app.use('/api/locations', locationsRoutes);
+app.use('/api/permissions', permissionsRoutes);
+app.use('/api/portal', employeePortalRoutes);
+app.use('/api/admin/notifications', adminNotificationsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -87,7 +90,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     message: 'Sistema de RH - Frequência',
     timestamp: new Date().toISOString(),
-    dbInitialized
+    dbInitialized: dbInitStarted
   });
 });
 
@@ -95,7 +98,6 @@ app.get('/api/health', (req, res) => {
 app.post('/api/init-db', async (req, res) => {
   try {
     await initDatabase();
-    dbInitialized = true;
     res.json({ 
       success: true, 
       message: 'Banco de dados inicializado com sucesso!' 

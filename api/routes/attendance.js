@@ -1,137 +1,63 @@
 import express from 'express';
-import pool from '../database.js';
+import pool, { queryWithRetry } from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { checkDepartmentAccess, hasAccessToEmployee } from '../middleware/departmentAccess.js';
+import { checkDepartmentAccess } from '../middleware/departmentAccess.js';
+import logger from '../utils/logger.js';
+import {
+  getNextPunchType,
+  validatePunchTime,
+  getEmployeeWithSchedule,
+  extractSchedule,
+  getTodayPunches,
+  formatPunchResponse,
+  getLocalDate,
+  getLocalTime
+} from '../utils/attendanceHelpers.js';
+import {
+  validateFaceDescriptor,
+  getEmployeesWithFace,
+  findBestMatch,
+  getEmployeeById,
+  saveFaceDescriptor
+} from '../utils/faceRecognitionHelpers.js';
 
 const router = express.Router();
 
-// Função auxiliar: determinar próximo tipo de ponto
-async function getNextPunchType(employeeId, date, schedule) {
-  // Buscar pontos já registrados hoje
-  const punches = await pool.query(
-    `SELECT punch_type, punch_time 
-     FROM attendance_punches 
-     WHERE employee_id = $1 AND date = $2
-     ORDER BY punch_time ASC`,
-    [employeeId, date]
-  );
+// ==========================================
+// REGISTRO DE PONTO PRINCIPAL
+// ==========================================
 
-  const registered = punches.rows.map(p => p.punch_type);
-  const hasBreak = schedule && schedule.break_start && schedule.break_end;
-
-  // Lógica de sequência
-  if (!registered.includes('entry')) {
-    return { type: 'entry', message: 'Entrada registrada', next: hasBreak ? 'Saída para intervalo' : 'Saída final' };
-  }
-
-  if (hasBreak && !registered.includes('break_start')) {
-    return { type: 'break_start', message: 'Saída para intervalo registrada', next: 'Retorno do intervalo' };
-  }
-
-  if (hasBreak && !registered.includes('break_end')) {
-    return { type: 'break_end', message: 'Retorno do intervalo registrado', next: 'Saída final' };
-  }
-
-  if (!registered.includes('exit')) {
-    return { type: 'exit', message: 'Saída registrada', next: 'Todos os pontos concluídos' };
-  }
-
-  return { type: null, message: 'Todos os pontos do dia já foram registrados', next: null };
-}
-
-// Função auxiliar: validar tolerância de horário
-function validatePunchTime(punchType, currentTime, schedule, toleranceMinutes = 30) {
-  if (!schedule) return { valid: true };
-
-  const [currentHour, currentMinute] = currentTime.split(':').map(Number);
-  const currentTotalMinutes = currentHour * 60 + currentMinute;
-
-  let expectedTime = null;
-  let expectedLabel = '';
-
-  switch (punchType) {
-    case 'entry':
-      expectedTime = schedule.start_time;
-      expectedLabel = 'entrada';
-      break;
-    case 'break_start':
-      expectedTime = schedule.break_start;
-      expectedLabel = 'saída para intervalo';
-      break;
-    case 'break_end':
-      expectedTime = schedule.break_end;
-      expectedLabel = 'retorno do intervalo';
-      break;
-    case 'exit':
-      expectedTime = schedule.end_time;
-      expectedLabel = 'saída';
-      break;
-  }
-
-  if (!expectedTime) return { valid: true };
-
-  const [expectedHour, expectedMinute] = expectedTime.split(':').map(Number);
-  const expectedTotalMinutes = expectedHour * 60 + expectedMinute;
-
-  const diff = currentTotalMinutes - expectedTotalMinutes;
-  const isLate = diff > toleranceMinutes;
-  const isEarly = diff < -toleranceMinutes;
-
-  return {
-    valid: true, // Sempre permitir, mas informar
-    expectedTime,
-    diff,
-    isLate,
-    isEarly,
-    message: isLate ? `${Math.abs(diff)} minutos de atraso na ${expectedLabel}` :
-             isEarly ? `${Math.abs(diff)} minutos adiantado na ${expectedLabel}` :
-             `Pontual (${expectedLabel})`
-  };
-}
-
-// Registrar ponto (sistema inteligente com múltiplos pontos)
 router.post('/', authenticateToken, async (req, res) => {
-  const { employee_id } = req.body;
+  const { employee_id, latitude, longitude, location_accuracy } = req.body;
 
   try {
     if (!employee_id) {
       return res.status(400).json({ error: 'employee_id é obrigatório' });
     }
 
-    console.log(`🕐 Registro de ponto - Funcionário ID: ${employee_id}`);
-
-    // 1. Buscar funcionário com schedule
-    const employeeResult = await pool.query(
-      `SELECT e.*, e.schedule_id,
-              s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name
-       FROM employees e
-       LEFT JOIN schedules s ON e.schedule_id = s.id
-       WHERE e.id = $1`,
-      [employee_id]
-    );
-
-    if (employeeResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    logger.debug('Registro de ponto', { employee_id });
+    
+    // Log de geolocalização se fornecida
+    if (latitude && longitude) {
+      logger.debug('Localização', { latitude, longitude, location_accuracy });
     }
 
-    const employee = employeeResult.rows[0];
+    // 1. Buscar funcionário com schedule
+    const employee = await getEmployeeWithSchedule(employee_id);
+    if (!employee) {
+      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    }
 
     if (employee.status === 'inactive') {
       return res.status(403).json({ error: 'Funcionário inativo' });
     }
 
-    // 2. Obter data e hora atuais (timezone local do servidor)
-    const now = new Date();
-    // Usar data local em vez de UTC
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const date = `${year}-${month}-${day}`;
-    const time = now.toTimeString().split(' ')[0].substring(0, 5); // HH:MM
+    // 2. Obter data e hora atuais
+    const date = getLocalDate();
+    const time = getLocalTime();
+    logger.debug('Ponto', { date, time });
 
-    console.log(`📅 Data: ${date} | Hora: ${time}`);
-
-    // 3. Verificar último ponto registrado (evitar duplicatas)
+    // 3. Verificar último ponto (evitar duplicatas)
     const lastPunch = await pool.query(
       `SELECT punch_time FROM attendance_punches
        WHERE employee_id = $1 AND date = $2
@@ -141,7 +67,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
     if (lastPunch.rows.length > 0) {
       const lastTime = new Date(lastPunch.rows[0].punch_time);
-      const diffSeconds = (now - lastTime) / 1000;
+      const diffSeconds = (new Date() - lastTime) / 1000;
 
       if (diffSeconds < 60) {
         return res.status(400).json({
@@ -152,13 +78,7 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     // 4. Determinar próximo tipo de ponto
-    const schedule = employee.schedule_id ? {
-      start_time: employee.start_time,
-      end_time: employee.end_time,
-      break_start: employee.break_start,
-      break_end: employee.break_end
-    } : null;
-
+    const schedule = extractSchedule(employee);
     const punchInfo = await getNextPunchType(employee_id, date, schedule);
 
     if (!punchInfo.type) {
@@ -168,95 +88,54 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    console.log(`✅ Tipo de ponto: ${punchInfo.type}`);
+    logger.debug('Tipo de ponto', { type: punchInfo.type });
 
-    // 5. Validar horário (com tolerância de 30 minutos)
+    // 5. Validar horário
     const timeValidation = validatePunchTime(punchInfo.type, time, schedule, 30);
 
-    // 6. Registrar o ponto com horário de Eirunepé/AM
-    const result = await pool.query(
-      `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id)
-       VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4)
-       RETURNING *`,
-      [employee_id, date, punchInfo.type, employee.schedule_id]
-    );
+    // 6. Registrar o ponto (com geolocalização se disponível)
+    const insertQuery = latitude && longitude
+      ? `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id, latitude, longitude, location_accuracy)
+         VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4, $5, $6, $7)
+         RETURNING *`
+      : `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id)
+         VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4)
+         RETURNING *`;
+    
+    const insertParams = latitude && longitude
+      ? [employee_id, date, punchInfo.type, employee.schedule_id, latitude, longitude, location_accuracy]
+      : [employee_id, date, punchInfo.type, employee.schedule_id];
 
-    console.log(`✅ Ponto registrado: ${punchInfo.type} às ${time}`);
+    await pool.query(insertQuery, insertParams);
+
+    logger.debug('Ponto registrado', { type: punchInfo.type, time });
 
     // 7. Buscar todos os pontos de hoje
-    const todayPunches = await pool.query(
-      `SELECT punch_type, TO_CHAR(punch_time, 'HH24:MI') as time
-       FROM attendance_punches
-       WHERE employee_id = $1 AND date = $2
-       ORDER BY punch_time ASC`,
-      [employee_id, date]
-    );
+    const todayPunches = await getTodayPunches(employee_id, date);
 
-    // 8. Calcular horas trabalhadas (se já tiver saída)
-    let hoursWorked = null;
-    const punches = todayPunches.rows;
-    const entry = punches.find(p => p.punch_type === 'entry');
-    const breakStart = punches.find(p => p.punch_type === 'break_start');
-    const breakEnd = punches.find(p => p.punch_type === 'break_end');
-    const exit = punches.find(p => p.punch_type === 'exit');
-
-    if (entry && exit) {
-      const entryTime = new Date(`2000-01-01T${entry.time}`);
-      const exitTime = new Date(`2000-01-01T${exit.time}`);
-      let totalMinutes = (exitTime - entryTime) / 1000 / 60;
-
-      if (breakStart && breakEnd) {
-        const breakStartTime = new Date(`2000-01-01T${breakStart.time}`);
-        const breakEndTime = new Date(`2000-01-01T${breakEnd.time}`);
-        const breakMinutes = (breakEndTime - breakStartTime) / 1000 / 60;
-        totalMinutes -= breakMinutes;
-      }
-
-      hoursWorked = (totalMinutes / 60).toFixed(2);
-    }
-
-    // 9. Retornar resposta
-    res.status(201).json({
-      success: true,
-      punch: {
-        type: punchInfo.type,
-        time: time,
-        message: punchInfo.message,
-        timeValidation: timeValidation.message || null
-      },
-      next: punchInfo.next,
-      today: {
-        entry: entry?.time || null,
-        break_start: breakStart?.time || null,
-        break_end: breakEnd?.time || null,
-        exit: exit?.time || null,
-        hours_worked: hoursWorked
-      },
-      employee: {
-        name: employee.name,
-        schedule: schedule ? `${schedule.start_time} - ${schedule.end_time}` : 'Não definido'
-      }
-    });
+    // 8. Retornar resposta formatada
+    const response = formatPunchResponse(punchInfo, timeValidation, todayPunches, employee, schedule);
+    res.status(201).json(response);
 
   } catch (error) {
-    console.error('❌ Erro ao registrar ponto:', error);
+    logger.error('Erro ao registrar ponto', error);
     res.status(500).json({ error: 'Erro ao registrar ponto', details: error.message });
   }
 });
 
-// Registrar check-in
+// ==========================================
+// CHECK-IN/CHECK-OUT LEGADOS
+// ==========================================
+
 router.post('/check-in', authenticateToken, async (req, res) => {
   const { employee_id, notes } = req.body;
 
   try {
-    // Verificar se já existe check-in hoje sem check-out
     const today = new Date().toISOString().split('T')[0];
     
     const existing = await pool.query(
       `SELECT * FROM attendance 
-       WHERE employee_id = $1 
-       AND DATE(check_in) = $2 
-       AND check_out IS NULL`,
+       WHERE employee_id = $1 AND DATE(check_in) = $2 AND check_out IS NULL`,
       [employee_id, today]
     );
 
@@ -269,28 +148,21 @@ router.post('/check-in', authenticateToken, async (req, res) => {
       [employee_id, notes]
     );
 
-    res.status(201).json({ 
-      id: result.rows[0].id, 
-      message: 'Check-in registrado com sucesso' 
-    });
+    res.status(201).json({ id: result.rows[0].id, message: 'Check-in registrado com sucesso' });
   } catch (error) {
-    console.error('Erro ao registrar check-in:', error);
+    logger.error('Erro ao registrar check-in', error);
     res.status(500).json({ error: 'Erro ao registrar check-in' });
   }
 });
 
-// Registrar check-out
 router.post('/check-out', authenticateToken, async (req, res) => {
   const { employee_id, notes } = req.body;
 
   try {
-    // Buscar último check-in sem check-out
     const attendance = await pool.query(
       `SELECT * FROM attendance 
-       WHERE employee_id = $1 
-       AND check_out IS NULL 
-       ORDER BY check_in DESC 
-       LIMIT 1`,
+       WHERE employee_id = $1 AND check_out IS NULL 
+       ORDER BY check_in DESC LIMIT 1`,
       [employee_id]
     );
 
@@ -307,24 +179,23 @@ router.post('/check-out', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Check-out registrado com sucesso' });
   } catch (error) {
-    console.error('Erro ao registrar check-out:', error);
+    logger.error('Erro ao registrar check-out', error);
     res.status(500).json({ error: 'Erro ao registrar check-out' });
   }
 });
 
-// Listar registros de frequência
+// ==========================================
+// LISTAGEM E ESTATÍSTICAS
+// ==========================================
+
 router.get('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
   const { employee_id, start_date, end_date } = req.query;
   
   try {
-    console.log('🔍 Buscando attendance com:', { employee_id, start_date, end_date });
-    
-    // Buscar direto de attendance_punches com agregação
     let query = `
       WITH daily_punches AS (
         SELECT 
-          employee_id,
-          date,
+          employee_id, date,
           MAX(CASE WHEN punch_type = 'entry' THEN TO_CHAR(punch_time, 'HH24:MI:SS') END) as entry_time,
           MAX(CASE WHEN punch_type = 'break_start' THEN TO_CHAR(punch_time, 'HH24:MI:SS') END) as break_start_time,
           MAX(CASE WHEN punch_type = 'break_end' THEN TO_CHAR(punch_time, 'HH24:MI:SS') END) as break_end_time,
@@ -333,97 +204,59 @@ router.get('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
           MAX(CASE WHEN punch_type = 'exit' THEN punch_time END) as exit_timestamp,
           MAX(CASE WHEN punch_type = 'break_start' THEN punch_time END) as break_start_timestamp,
           MAX(CASE WHEN punch_type = 'break_end' THEN punch_time END) as break_end_timestamp
-        FROM attendance_punches
-        WHERE 1=1
+        FROM attendance_punches WHERE 1=1
     `;
     
     const params = [];
     let paramCount = 1;
 
     if (employee_id) {
-      query += ` AND employee_id = $${paramCount}`;
+      query += ` AND employee_id = $${paramCount++}`;
       params.push(employee_id);
-      paramCount++;
     }
-
     if (start_date) {
-      query += ` AND date >= $${paramCount}`;
+      query += ` AND date >= $${paramCount++}`;
       params.push(start_date);
-      paramCount++;
     }
-
     if (end_date) {
-      query += ` AND date <= $${paramCount}`;
+      query += ` AND date <= $${paramCount++}`;
       params.push(end_date);
-      paramCount++;
     }
 
     query += `
         GROUP BY employee_id, date
       )
-      SELECT 
-        dp.employee_id,
-        dp.date,
-        dp.entry_time,
-        dp.break_start_time,
-        dp.break_end_time,
-        dp.exit_time,
-        e.name as employee_name,
-        p.name as position_name,
-        d.name as department_name,
-        e.department_id,
-        -- Calcular total de horas
+      SELECT dp.*, e.name as employee_name, p.name as position_name, d.name as department_name, e.department_id,
         CASE 
           WHEN dp.break_start_timestamp IS NOT NULL AND dp.break_end_timestamp IS NOT NULL AND dp.exit_timestamp IS NOT NULL THEN
-            EXTRACT(EPOCH FROM (
-              (dp.break_start_timestamp - dp.entry_timestamp) +
-              (dp.exit_timestamp - dp.break_end_timestamp)
-            )) / 3600
+            EXTRACT(EPOCH FROM ((dp.break_start_timestamp - dp.entry_timestamp) + (dp.exit_timestamp - dp.break_end_timestamp))) / 3600
           WHEN dp.exit_timestamp IS NOT NULL THEN
             EXTRACT(EPOCH FROM (dp.exit_timestamp - dp.entry_timestamp)) / 3600
           ELSE NULL
         END as total_hours,
-        -- Backward compatibility - retornar timestamp completo para página Attendance
-        dp.entry_timestamp as check_in,
-        dp.exit_timestamp as check_out
+        dp.entry_timestamp as check_in, dp.exit_timestamp as check_out
       FROM daily_punches dp
       JOIN employees e ON dp.employee_id = e.id
       LEFT JOIN positions p ON e.position_id = p.id
       LEFT JOIN departments d ON e.department_id = d.id
     `;
 
-    // Se é gestor, filtrar apenas seu departamento
     if (req.user.role === 'gestor') {
-      query += ` WHERE e.department_id = $${paramCount}`;
-      params.push(req.userDepartmentId);
-      paramCount++;
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      query += ` WHERE e.department_id = ANY($${paramCount++})`;
+      params.push(deptIds);
     }
 
     query += ` ORDER BY dp.date DESC`;
 
-    console.log('📝 Query SQL:', query);
-    console.log('📌 Parâmetros:', params);
-
     const result = await pool.query(query, params);
-    
-    console.log('✅ Registros encontrados:', result.rows.length);
-    if (result.rows.length > 0) {
-      console.log('📊 Primeiro registro:', {
-        date: result.rows[0].date,
-        entry: result.rows[0].entry_time,
-        exit: result.rows[0].exit_time,
-        hours: result.rows[0].total_hours
-      });
-    }
-    
     res.json(result.rows);
   } catch (error) {
-    console.error('Erro ao buscar registros:', error);
+    logger.error('Erro ao buscar registros', error);
     res.status(500).json({ error: 'Erro ao buscar registros' });
   }
 });
 
-// Estatísticas de frequência
 router.get('/stats/:employee_id', authenticateToken, async (req, res) => {
   const { employee_id } = req.params;
   const { month, year } = req.query;
@@ -435,8 +268,7 @@ router.get('/stats/:employee_id', authenticateToken, async (req, res) => {
         COUNT(CASE WHEN exit_time IS NOT NULL THEN 1 END) as complete_days,
         COUNT(CASE WHEN exit_time IS NULL THEN 1 END) as incomplete_days,
         COALESCE(SUM(total_hours), 0) as total_hours
-      FROM attendance_daily 
-      WHERE employee_id = $1
+      FROM attendance_daily WHERE employee_id = $1
     `;
     const params = [employee_id];
 
@@ -448,12 +280,231 @@ router.get('/stats/:employee_id', authenticateToken, async (req, res) => {
     const result = await pool.query(query, params);
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao buscar estatísticas:', error);
+    logger.error('Erro ao buscar estatísticas', error);
     res.status(500).json({ error: 'Erro ao buscar estatísticas' });
   }
 });
 
-// ADMIN: Listar pontos individuais de um dia
+// ==========================================
+// DADOS SEMANAIS PARA GRÁFICO
+// ==========================================
+
+router.get('/weekly-stats', authenticateToken, async (req, res) => {
+  try {
+    // Buscar total de funcionários ativos
+    const employeesResult = await pool.query(
+      `SELECT COUNT(*) as total FROM employees WHERE status = 'active'`
+    );
+    const totalEmployees = parseInt(employeesResult.rows[0].total) || 1;
+
+    // Buscar presença dos últimos 7 dias
+    const result = await pool.query(`
+      SELECT 
+        date::date as date,
+        COUNT(DISTINCT employee_id) as present_count
+      FROM attendance_punches
+      WHERE date >= CURRENT_DATE - INTERVAL '6 days'
+        AND date <= CURRENT_DATE
+        AND punch_type = 'entry'
+      GROUP BY date::date
+      ORDER BY date ASC
+    `);
+
+    // Criar mapa de presença por data
+    const presenceMap = new Map();
+    result.rows.forEach(row => {
+      const dateStr = row.date.toISOString().split('T')[0];
+      presenceMap.set(dateStr, parseInt(row.present_count));
+    });
+
+    // Gerar dados para os últimos 7 dias
+    const weekData = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      const dayOfWeek = date.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      
+      let presentCount = presenceMap.get(dateStr) || 0;
+      let rate = 0;
+      
+      if (!isWeekend && totalEmployees > 0) {
+        rate = Math.round((presentCount / totalEmployees) * 100);
+      }
+
+      weekData.push({
+        date: dateStr,
+        dayOfWeek,
+        isWeekend,
+        presentCount,
+        totalEmployees,
+        rate
+      });
+    }
+
+    res.json(weekData);
+  } catch (error) {
+    logger.error('Erro ao buscar estatísticas semanais', error);
+    res.status(500).json({ error: 'Erro ao buscar estatísticas semanais' });
+  }
+});
+
+// ==========================================
+// BANCO DE HORAS
+// ==========================================
+
+router.get('/hour-bank/:employee_id', authenticateToken, async (req, res) => {
+  const { employee_id } = req.params;
+  const { month, year } = req.query;
+  
+  const currentMonth = month || new Date().getMonth() + 1;
+  const currentYear = year || new Date().getFullYear();
+
+  try {
+    // Buscar funcionário e sua jornada (com retry para evitar too many clients)
+    const employeeResult = await queryWithRetry(`
+      SELECT 
+        e.*, 
+        s.name as schedule_name,
+        s.start_time,
+        s.end_time,
+        s.break_start,
+        s.break_end,
+        s.workdays
+      FROM employees e
+      LEFT JOIN schedules s ON e.schedule_id = s.id
+      WHERE e.id = $1
+    `, [employee_id]);
+
+    if (employeeResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Funcionário não encontrado' });
+    }
+
+    const employee = employeeResult.rows[0];
+    
+    // Calcular horas de trabalho diárias a partir do horário
+    let dailyWorkHours = 8; // Padrão 8h
+    if (employee.start_time && employee.end_time) {
+      const start = employee.start_time.split(':');
+      const end = employee.end_time.split(':');
+      const startMinutes = parseInt(start[0]) * 60 + parseInt(start[1]);
+      const endMinutes = parseInt(end[0]) * 60 + parseInt(end[1]);
+      let totalMinutes = endMinutes - startMinutes;
+      
+      // Descontar intervalo se existir
+      if (employee.break_start && employee.break_end) {
+        const breakStart = employee.break_start.split(':');
+        const breakEnd = employee.break_end.split(':');
+        const breakStartMinutes = parseInt(breakStart[0]) * 60 + parseInt(breakStart[1]);
+        const breakEndMinutes = parseInt(breakEnd[0]) * 60 + parseInt(breakEnd[1]);
+        totalMinutes -= (breakEndMinutes - breakStartMinutes);
+      }
+      
+      dailyWorkHours = Math.round(totalMinutes / 60 * 10) / 10; // Arredondar para 1 casa decimal
+    }
+    
+    // Dias de trabalho configurados (padrão seg-sex)
+    const workdays = employee.workdays || ['1', '2', '3', '4', '5'];
+
+    // Buscar todos os registros do mês (com retry)
+    const attendanceResult = await queryWithRetry(`
+      SELECT 
+        date,
+        MIN(CASE WHEN punch_type = 'entry' THEN punch_time END) as entry_time,
+        MAX(CASE WHEN punch_type = 'exit' THEN punch_time END) as exit_time,
+        MIN(CASE WHEN punch_type = 'break_start' THEN punch_time END) as break_start,
+        MAX(CASE WHEN punch_type = 'break_end' THEN punch_time END) as break_end
+      FROM attendance_punches
+      WHERE employee_id = $1
+        AND EXTRACT(MONTH FROM date) = $2
+        AND EXTRACT(YEAR FROM date) = $3
+      GROUP BY date
+      ORDER BY date
+    `, [employee_id, currentMonth, currentYear]);
+
+    let totalWorkedMinutes = 0;
+    let expectedMinutes = 0;
+    const dailyDetails = [];
+
+    attendanceResult.rows.forEach(row => {
+      const dayOfWeek = new Date(row.date).getDay();
+      const isWorkday = workdays.includes(String(dayOfWeek));
+      
+      if (isWorkday) {
+        expectedMinutes += dailyWorkHours * 60;
+      }
+
+      if (row.entry_time && row.exit_time) {
+        const entry = new Date(row.entry_time);
+        const exit = new Date(row.exit_time);
+        let worked = (exit - entry) / (1000 * 60); // Minutos
+
+        // Descontar intervalo se existir
+        if (row.break_start && row.break_end) {
+          const breakStart = new Date(row.break_start);
+          const breakEnd = new Date(row.break_end);
+          const breakDuration = (breakEnd - breakStart) / (1000 * 60);
+          worked -= breakDuration;
+        }
+
+        totalWorkedMinutes += Math.max(0, worked);
+        
+        const balance = worked - (isWorkday ? dailyWorkHours * 60 : 0);
+        dailyDetails.push({
+          date: row.date,
+          worked: Math.round(worked),
+          expected: isWorkday ? dailyWorkHours * 60 : 0,
+          balance: Math.round(balance),
+          isWorkday
+        });
+      } else if (isWorkday) {
+        // Dia útil sem registro completo
+        dailyDetails.push({
+          date: row.date,
+          worked: 0,
+          expected: dailyWorkHours * 60,
+          balance: -dailyWorkHours * 60,
+          isWorkday: true,
+          incomplete: true
+        });
+      }
+    });
+
+    const balanceMinutes = Math.round(totalWorkedMinutes - expectedMinutes);
+    const balanceHours = Math.floor(Math.abs(balanceMinutes) / 60);
+    const balanceMins = Math.round(Math.abs(balanceMinutes) % 60);
+
+    res.json({
+      employee: {
+        id: employee.id,
+        name: employee.name,
+        schedule: employee.schedule_name,
+        dailyWorkHours
+      },
+      summary: {
+        month: currentMonth,
+        year: currentYear,
+        totalWorkedMinutes: Math.round(totalWorkedMinutes),
+        totalWorkedHours: Math.round(totalWorkedMinutes / 60 * 10) / 10,
+        expectedMinutes: Math.round(expectedMinutes),
+        expectedHours: Math.round(expectedMinutes / 60),
+        balanceMinutes: balanceMinutes,
+        balanceFormatted: `${balanceMinutes >= 0 ? '+' : '-'}${balanceHours}h${balanceMins.toString().padStart(2, '0')}min`,
+        isPositive: balanceMinutes >= 0
+      },
+      dailyDetails
+    });
+  } catch (error) {
+    logger.error('Erro ao calcular banco de horas', error);
+    res.status(500).json({ error: 'Erro ao calcular banco de horas' });
+  }
+});
+
+// ==========================================
+// ADMIN: CRUD DE PONTOS INDIVIDUAIS
+// ==========================================
+
 router.get('/punches', authenticateToken, async (req, res) => {
   const { employee_id, date } = req.query;
 
@@ -462,61 +513,34 @@ router.get('/punches', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'employee_id e date são obrigatórios' });
     }
 
-    console.log('🔍 Buscando pontos para:', { employee_id, date });
-
     const result = await pool.query(
-      `SELECT 
-        id,
-        employee_id,
-        date,
-        TO_CHAR(punch_time, 'HH24:MI:SS') as punch_time_str,
-        punch_time,
-        punch_type,
-        schedule_id,
-        created_at
-       FROM attendance_punches 
-       WHERE employee_id = $1 
-       AND date = $2::date
+      `SELECT id, employee_id, date, TO_CHAR(punch_time, 'HH24:MI:SS') as punch_time_str,
+              punch_time, punch_type, schedule_id, created_at
+       FROM attendance_punches WHERE employee_id = $1 AND date = $2::date
        ORDER BY punch_time ASC`,
       [employee_id, date]
     );
 
-    console.log('✅ Pontos encontrados:', result.rows.length);
-    if (result.rows.length > 0) {
-      console.log('📋 Primeiro ponto (raw):', result.rows[0]);
-    }
-
-    // Retornar com o horário já formatado
     const formattedRows = result.rows.map(row => ({
       ...row,
-      punch_time: row.punch_time_str, // Usar o horário formatado
+      punch_time: row.punch_time_str,
     }));
 
     res.json(formattedRows);
   } catch (error) {
-    console.error('Erro ao buscar pontos:', error);
+    logger.error('Erro ao buscar pontos', error);
     res.status(500).json({ error: 'Erro ao buscar pontos' });
   }
 });
 
-// ADMIN: Criar ponto manual
 router.post('/punches', authenticateToken, async (req, res) => {
   const { employee_id, date, punch_type, time } = req.body;
 
   try {
-    console.log('➕ Criando ponto manual:', { employee_id, date, punch_type, time });
-
-    // Validar campos obrigatórios
     if (!employee_id || !date || !punch_type || !time) {
       return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
     }
 
-    // Criar timestamp sem conversão de timezone
-    const punchTimestamp = `${date} ${time}`;
-    
-    console.log('🕐 Timestamp do ponto:', punchTimestamp);
-
-    // Verificar se já existe um ponto do mesmo tipo no mesmo dia
     const existing = await pool.query(
       `SELECT id FROM attendance_punches 
        WHERE employee_id = $1 AND date = $2 AND punch_type = $3`,
@@ -529,89 +553,60 @@ router.post('/punches', authenticateToken, async (req, res) => {
       });
     }
 
-    // Inserir novo ponto
+    const punchTimestamp = `${date} ${time}`;
     const result = await pool.query(
       `INSERT INTO attendance_punches (employee_id, date, punch_type, punch_time)
-       VALUES ($1, $2, $3, $4::timestamp)
-       RETURNING *`,
+       VALUES ($1, $2, $3, $4::timestamp) RETURNING *`,
       [employee_id, date, punch_type, punchTimestamp]
     );
 
-    console.log('✅ Ponto criado com sucesso:', result.rows[0]);
-
     res.json({ success: true, message: 'Ponto criado com sucesso', punch: result.rows[0] });
   } catch (error) {
-    console.error('❌ Erro ao criar ponto:', error);
+    logger.error('Erro ao criar ponto', error);
     
-    // Verificar violação de constraint
-    if (error.code === '23505') { // unique violation
-      return res.status(400).json({ 
-        error: 'Já existe um registro deste tipo para este dia' 
-      });
+    if (error.code === '23505') {
+      return res.status(400).json({ error: 'Já existe um registro deste tipo para este dia' });
     }
     
     res.status(500).json({ error: 'Erro ao criar ponto' });
   }
 });
 
-// ADMIN: Atualizar ponto individual
 router.put('/punches/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { punch_type, time } = req.body;
 
   try {
-    console.log('🔧 Atualizando ponto:', { id, punch_type, time });
-
-    // Buscar ponto existente
-    const existing = await pool.query(
-      'SELECT * FROM attendance_punches WHERE id = $1',
-      [id]
-    );
+    const existing = await pool.query('SELECT * FROM attendance_punches WHERE id = $1', [id]);
 
     if (existing.rows.length === 0) {
       return res.status(404).json({ error: 'Ponto não encontrado' });
     }
 
     const punch = existing.rows[0];
-    console.log('📋 Ponto existente:', { date: punch.date, old_time: punch.punch_time });
-
-    // Criar timestamp sem conversão de timezone
-    // O horário já está no fuso correto (America/Rio_Branco)
     const dateStr = typeof punch.date === 'string' 
       ? punch.date.split('T')[0] 
       : punch.date.toISOString().split('T')[0];
     
     const newPunchTimestamp = `${dateStr} ${time}`;
-    
-    console.log('🕐 Novo timestamp:', newPunchTimestamp);
 
-    // Atualizar sem conversão de timezone
     await pool.query(
-      `UPDATE attendance_punches 
-       SET punch_type = $1, 
-           punch_time = $2::timestamp
-       WHERE id = $3`,
+      `UPDATE attendance_punches SET punch_type = $1, punch_time = $2::timestamp WHERE id = $3`,
       [punch_type, newPunchTimestamp, id]
     );
 
-    console.log('✅ Ponto atualizado com sucesso');
-
     res.json({ success: true, message: 'Ponto atualizado com sucesso' });
   } catch (error) {
-    console.error('❌ Erro ao atualizar ponto:', error);
+    logger.error('Erro ao atualizar ponto', error);
     
-    // Verificar violação de constraint
-    if (error.code === '23505') { // unique violation
-      return res.status(400).json({ 
-        error: 'Já existe um registro deste tipo para este dia' 
-      });
+    if (error.code === '23505') {
+      return res.status(400).json({ error: 'Já existe um registro deste tipo para este dia' });
     }
     
     res.status(500).json({ error: 'Erro ao atualizar ponto' });
   }
 });
 
-// ADMIN: Deletar ponto individual
 router.delete('/punches/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
@@ -627,64 +622,34 @@ router.delete('/punches/:id', authenticateToken, async (req, res) => {
 
     res.json({ success: true, message: 'Ponto excluído com sucesso' });
   } catch (error) {
-    console.error('Erro ao excluir ponto:', error);
+    logger.error('Erro ao excluir ponto', error);
     res.status(500).json({ error: 'Erro ao excluir ponto' });
   }
 });
 
-// Endpoint para verificar face e identificar funcionário
+// ==========================================
+// RECONHECIMENTO FACIAL
+// ==========================================
+
 router.post('/face-verify', authenticateToken, async (req, res) => {
   try {
-    console.log('=== Iniciando verificação facial ===');
-    console.log('Headers recebidos:', Object.keys(req.headers));
-    console.log('Body recebido:', req.body ? 'presente' : 'ausente');
-    console.log('User autenticado:', req.user ? req.user.username : 'nenhum');
+    logger.debug('Iniciando verificação facial');
     
     const { faceDescriptor } = req.body;
     
-    console.log('Tipo do descriptor recebido:', typeof faceDescriptor);
-    console.log('É array?', Array.isArray(faceDescriptor));
-    console.log('Tamanho do descriptor:', faceDescriptor?.length);
-    console.log('Primeiros 5 valores:', faceDescriptor?.slice(0, 5));
-    
-    if (!faceDescriptor || !Array.isArray(faceDescriptor)) {
-      console.error('❌ Face descriptor inválido:', typeof faceDescriptor);
-      return res.status(400).json({ 
-        error: 'faceDescriptor inválido',
-        details: 'Descriptor deve ser um array de números'
-      });
+    // Validar descriptor
+    const validation = validateFaceDescriptor(faceDescriptor);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.error, details: validation.details });
     }
 
-    if (faceDescriptor.length !== 128) {
-      console.error(`❌ Descriptor tem tamanho incorreto: ${faceDescriptor.length} (esperado: 128)`);
-      return res.status(400).json({ 
-        error: 'faceDescriptor inválido',
-        details: `Descriptor deve ter 128 valores, mas tem ${faceDescriptor.length}`
-      });
-    }
+    logger.debug('Descriptor válido', { length: faceDescriptor.length });
 
-    console.log(`✅ Descriptor válido - length: ${faceDescriptor.length}`);
+    // Buscar funcionários com face cadastrada
+    const employees = await getEmployeesWithFace();
+    logger.debug('Funcionários com face', { count: employees.length });
 
-    // Buscar todos os funcionários ativos com face_descriptor cadastrado
-    console.log('🔍 Buscando funcionários com face cadastrada...');
-    const result = await pool.query(
-      `SELECT id, name, cpf, face_descriptor 
-       FROM employees 
-       WHERE status = 'active' AND face_descriptor IS NOT NULL AND face_descriptor != ''`
-    );
-
-    console.log(`📊 Funcionários encontrados: ${result.rows.length}`);
-    
-    if (result.rows.length > 0) {
-      console.log('📋 Funcionários com face:');
-      result.rows.forEach(emp => {
-        const descLength = emp.face_descriptor ? emp.face_descriptor.length : 0;
-        console.log(`  - ${emp.name} (ID: ${emp.id}): descriptor length = ${descLength}`);
-      });
-    }
-
-    if (result.rows.length === 0) {
-      console.warn('Nenhum funcionário tem face cadastrada');
+    if (employees.length === 0) {
       return res.status(404).json({ 
         error: 'Nenhum funcionário com reconhecimento facial cadastrado.',
         hint: 'Vá em Funcionários → Clique no ícone de câmera para cadastrar uma face',
@@ -692,76 +657,18 @@ router.post('/face-verify', authenticateToken, async (req, res) => {
       });
     }
 
-    // Função para calcular distância euclidiana
-    const euclideanDistance = (desc1, desc2) => {
-      if (desc1.length !== desc2.length) {
-        console.error(`Tamanhos diferentes: ${desc1.length} vs ${desc2.length}`);
-        return Infinity;
-      }
-      return Math.sqrt(
-        desc1.reduce((sum, val, i) => sum + Math.pow(val - desc2[i], 2), 0)
-      );
-    };
-
-    // Verificar qual funcionário corresponde à face
-    let bestMatch = null;
-    let bestDistance = Infinity;
-    const threshold = 0.6; // Ajustar conforme necessário
-
-    console.log('--- Comparando com faces cadastradas ---');
-
-    for (const employee of result.rows) {
-      if (!employee.face_descriptor) {
-        console.log(`⚠️ ${employee.name}: face_descriptor está vazio`);
-        continue;
-      }
-
-      try {
-        console.log(`🔍 Processando ${employee.name}...`);
-        console.log(`   Tipo do descriptor armazenado: ${typeof employee.face_descriptor}`);
-        console.log(`   Primeiros 100 caracteres: ${employee.face_descriptor.substring(0, 100)}`);
-        
-        const storedDescriptor = JSON.parse(employee.face_descriptor);
-        
-        if (!Array.isArray(storedDescriptor)) {
-          console.error(`❌ ${employee.name}: descriptor não é array (tipo: ${typeof storedDescriptor})`);
-          continue;
-        }
-        
-        console.log(`   Array length: ${storedDescriptor.length}`);
-        
-        if (storedDescriptor.length !== 128) {
-          console.error(`❌ ${employee.name}: descriptor tem ${storedDescriptor.length} valores (esperado: 128)`);
-          continue;
-        }
-        
-        const distance = euclideanDistance(faceDescriptor, storedDescriptor);
-
-        console.log(`✅ ${employee.name}: distância = ${distance.toFixed(3)} (threshold: ${threshold})`);
-
-        if (distance < bestDistance && distance < threshold) {
-          bestDistance = distance;
-          bestMatch = employee;
-        }
-      } catch (parseError) {
-        console.error(`❌ Erro ao parsear descriptor de ${employee.name}:`, parseError.message);
-        console.error(`   Conteúdo do descriptor: ${employee.face_descriptor.substring(0, 200)}`);
-      }
-    }
+    // Encontrar melhor match
+    const { bestMatch, bestDistance, threshold } = findBestMatch(faceDescriptor, employees);
 
     if (bestMatch) {
-      console.log(`✅ Match encontrado: ${bestMatch.name} (distância: ${bestDistance.toFixed(3)})`);
+      logger.debug('Match encontrado', { name: bestMatch.name, distance: bestDistance.toFixed(3) });
       return res.json({
         verified: true,
-        employee: {
-          id: bestMatch.id,
-          name: bestMatch.name,
-          cpf: bestMatch.cpf
-        },
-        confidence: (1 - bestDistance).toFixed(2) // Confiança de 0-1
+        employee: { id: bestMatch.id, name: bestMatch.name, cpf: bestMatch.cpf },
+        confidence: (1 - bestDistance).toFixed(2)
       });
     } else {
-      console.log(`❌ Nenhum match encontrado. Melhor distância: ${bestDistance.toFixed(3)} (threshold: ${threshold})`);
+      logger.debug('Nenhum match encontrado', { bestDistance: bestDistance.toFixed(3) });
       return res.status(404).json({
         error: 'Face não reconhecida.',
         hint: 'Certifique-se de ter cadastrado sua face em Funcionários → ícone de câmera',
@@ -770,8 +677,7 @@ router.post('/face-verify', authenticateToken, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('❌ Erro ao verificar face:', error);
-    console.error('Stack trace:', error.stack);
+    logger.error('Erro ao verificar face', error);
     res.status(500).json({ 
       error: 'Erro ao verificar reconhecimento facial',
       details: error.message,
@@ -780,62 +686,44 @@ router.post('/face-verify', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint para registrar/atualizar face de um funcionário (admin apenas)
 router.post('/face-register', authenticateToken, async (req, res) => {
   const { employee_id, faceDescriptor } = req.body;
 
   try {
-    // Verificar se é admin
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Apenas administradores podem registrar faces' });
     }
 
-    if (!employee_id || !faceDescriptor || !Array.isArray(faceDescriptor)) {
-      return res.status(400).json({ error: 'employee_id e faceDescriptor são obrigatórios' });
+    const validation = validateFaceDescriptor(faceDescriptor);
+    if (!employee_id || !validation.valid) {
+      return res.status(400).json({ error: 'employee_id e faceDescriptor válido são obrigatórios' });
     }
 
-    // Verificar se funcionário existe
-    const employeeCheck = await pool.query(
-      'SELECT id, name FROM employees WHERE id = $1',
-      [employee_id]
-    );
-
-    if (employeeCheck.rows.length === 0) {
+    const employee = await getEmployeeById(employee_id);
+    if (!employee) {
       return res.status(404).json({ error: 'Funcionário não encontrado' });
     }
 
-    console.log(`Registrando face para funcionário ${employee_id} - ${employeeCheck.rows[0].name}`);
-    console.log(`Descriptor length: ${faceDescriptor.length}`);
+    logger.debug('Registrando face', { employee_id, name: employee.name });
 
-    // Salvar descriptor como JSON
-    const updateResult = await pool.query(
-      'UPDATE employees SET face_descriptor = $1 WHERE id = $2 RETURNING id, name',
-      [JSON.stringify(faceDescriptor), employee_id]
-    );
-
-    console.log('Face registrada com sucesso:', updateResult.rows[0]);
+    await saveFaceDescriptor(employee_id, faceDescriptor);
 
     res.json({
       success: true,
-      message: `Reconhecimento facial registrado para ${employeeCheck.rows[0].name}`,
-      employee: employeeCheck.rows[0]
+      message: `Reconhecimento facial registrado para ${employee.name}`,
+      employee
     });
   } catch (error) {
-    console.error('Erro ao registrar face:', error);
-    console.error('Stack trace:', error.stack);
+    logger.error('Erro ao registrar face', error);
     
-    // Detectar erro de coluna não existente
-    if (error.message && error.message.includes('column') && error.message.includes('face_descriptor')) {
+    if (error.message?.includes('face_descriptor')) {
       return res.status(500).json({ 
-        error: 'Coluna face_descriptor não encontrada. Execute a migração: psql $DATABASE_URL -f api/migrations/add-face-recognition.sql',
+        error: 'Coluna face_descriptor não encontrada. Execute a migração.',
         details: error.message
       });
     }
     
-    res.status(500).json({ 
-      error: 'Erro ao registrar reconhecimento facial',
-      details: error.message 
-    });
+    res.status(500).json({ error: 'Erro ao registrar reconhecimento facial', details: error.message });
   }
 });
 

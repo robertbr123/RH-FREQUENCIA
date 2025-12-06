@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import axios from 'axios'
-import { Plus, Search, Edit, Trash2, UserCircle, FileText, Upload, Download, Users, UserCheck, UserX, Briefcase, List, LayoutGrid, Camera, Filter, X } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, UserCircle, FileText, Upload, Download, Users, UserCheck, UserX, Briefcase, List, LayoutGrid, Camera, Key } from 'lucide-react'
 import EmployeeModal from '../components/EmployeeModal'
 import EmployeeCard from '../components/EmployeeCard'
 import ConfirmDialog from '../components/ConfirmDialog'
 import FaceRegistrationModal from '../components/FaceRegistrationModal'
 import EmptyState from '../components/EmptyState'
-import SearchInput from '../components/SearchInput'
+import Avatar from '../components/Avatar'
 import { toast } from '../utils/toast'
 
 interface Employee {
@@ -28,7 +28,6 @@ interface Employee {
 
 export default function Employees() {
   const [employees, setEmployees] = useState<Employee[]>([])
-  const [filteredEmployees, setFilteredEmployees] = useState<Employee[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState('')
   const [selectedPosition, setSelectedPosition] = useState('')
@@ -57,56 +56,19 @@ export default function Employees() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('list')
+  
+  // Estado para modal de redefinição de senha
+  const [resetPasswordModal, setResetPasswordModal] = useState({
+    isOpen: false,
+    employee: null as Employee | null,
+    newPassword: '',
+    confirmPassword: '',
+    loading: false
+  })
 
-  useEffect(() => {
-    loadEmployees()
-    loadFilters()
-  }, [])
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300)
-    return () => clearTimeout(t)
-  }, [searchTerm])
-
-  useEffect(() => {
-    applyFilters()
-    // resetar página ao aplicar filtros
-    setCurrentPage(1)
-  }, [debouncedSearchTerm, selectedDepartment, selectedPosition, selectedSector, selectedStatus, employees])
-
-  const loadEmployees = async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await axios.get('/api/employees', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      setEmployees(response.data)
-      setFilteredEmployees(response.data)
-    } catch (error) {
-      console.error('Erro ao carregar funcionários:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadFilters = async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const [deptsRes, posRes, sectRes] = await Promise.all([
-        axios.get('/api/organization/departments', { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get('/api/organization/positions', { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get('/api/organization/sectors', { headers: { Authorization: `Bearer ${token}` } }),
-      ])
-      setDepartments(deptsRes.data)
-      setPositions(posRes.data)
-      setSectors(sectRes.data)
-    } catch (error) {
-      console.error('Erro ao carregar filtros:', error)
-    }
-  }
-
-  const applyFilters = () => {
-    let filtered = employees.filter((emp: Employee) => {
+  // Filtrar funcionários de forma memoizada (remove estado duplicado filteredEmployees)
+  const filteredEmployees = useMemo(() => {
+    return employees.filter((emp: Employee) => {
       const st = debouncedSearchTerm.toLowerCase()
       const matchSearch = !st || emp.name.toLowerCase().includes(st) ||
         emp.email.toLowerCase().includes(st) ||
@@ -129,10 +91,54 @@ export default function Employees() {
 
       return matchSearch && matchDepartment && matchPosition && matchSector && matchStatus
     })
-    setFilteredEmployees(filtered)
-  }
+  }, [employees, debouncedSearchTerm, selectedDepartment, selectedPosition, selectedSector, selectedStatus])
 
-  const handleDelete = async (id: number) => {
+  // Reset página quando filtros mudam
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [debouncedSearchTerm, selectedDepartment, selectedPosition, selectedSector, selectedStatus])
+
+  useEffect(() => {
+    loadEmployees()
+    loadFilters()
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300)
+    return () => clearTimeout(t)
+  }, [searchTerm])
+
+  const loadEmployees = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/employees', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setEmployees(response.data)
+    } catch (error) {
+      console.error('Erro ao carregar funcionários:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const loadFilters = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const [deptsRes, posRes, sectRes] = await Promise.all([
+        axios.get('/api/organization/departments', { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get('/api/organization/positions', { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get('/api/organization/sectors', { headers: { Authorization: `Bearer ${token}` } }),
+      ])
+      setDepartments(deptsRes.data)
+      setPositions(posRes.data)
+      setSectors(sectRes.data)
+    } catch (error) {
+      console.error('Erro ao carregar filtros:', error)
+    }
+  }, [])
+
+  const handleDelete = useCallback(async (id: number) => {
     const employee = employees.find((emp: Employee) => emp.id === id)
     setConfirmDialog({
       isOpen: true,
@@ -140,9 +146,9 @@ export default function Employees() {
       employeeName: employee?.name || '',
       employeeStatus: employee?.status || 'active'
     })
-  }
+  }, [employees])
 
-  const confirmDelete = async () => {
+  const confirmDelete = useCallback(async () => {
     if (!confirmDialog.employeeId) return
 
     setIsDeleting(true)
@@ -176,28 +182,79 @@ export default function Employees() {
     } finally {
       setIsDeleting(false)
     }
-  }
+  }, [confirmDialog, loadEmployees])
 
-  const handleEdit = (employee: Employee) => {
+  const handleEdit = useCallback((employee: Employee) => {
     setSelectedEmployee(employee)
     setModalOpen(true)
-  }
+  }, [])
 
-  const handleAdd = () => {
+  const handleAdd = useCallback(() => {
     setSelectedEmployee(null)
     setModalOpen(true)
-  }
+  }, [])
 
-  const handleModalClose = () => {
+  const handleModalClose = useCallback(() => {
     setModalOpen(false)
     setSelectedEmployee(null)
     loadEmployees()
-  }
+  }, [loadEmployees])
 
-  const handleViewCard = (id: number) => {
+  const handleViewCard = useCallback((id: number) => {
     setCardEmployeeId(id)
     setShowCard(true)
-  }
+  }, [])
+
+  // Função para redefinir senha do funcionário
+  const handleResetPassword = useCallback((employee: Employee) => {
+    setResetPasswordModal({
+      isOpen: true,
+      employee,
+      newPassword: '',
+      confirmPassword: '',
+      loading: false
+    })
+  }, [])
+
+  const confirmResetPassword = useCallback(async () => {
+    if (!resetPasswordModal.employee) return
+    
+    if (resetPasswordModal.newPassword.length < 6) {
+      toast.error('A senha deve ter pelo menos 6 caracteres')
+      return
+    }
+    
+    if (resetPasswordModal.newPassword !== resetPasswordModal.confirmPassword) {
+      toast.error('As senhas não conferem')
+      return
+    }
+    
+    setResetPasswordModal(prev => ({ ...prev, loading: true }))
+    
+    try {
+      const token = localStorage.getItem('token')
+      await axios.post(`/api/portal/admin/reset-password`, {
+        employee_id: resetPasswordModal.employee.id,
+        new_password: resetPasswordModal.newPassword
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      toast.success(`Senha de ${resetPasswordModal.employee.name} redefinida com sucesso!`)
+      setResetPasswordModal({
+        isOpen: false,
+        employee: null,
+        newPassword: '',
+        confirmPassword: '',
+        loading: false
+      })
+    } catch (error: any) {
+      console.error('Erro ao redefinir senha:', error)
+      toast.error(error.response?.data?.error || 'Erro ao redefinir senha')
+    } finally {
+      setResetPasswordModal(prev => ({ ...prev, loading: false }))
+    }
+  }, [resetPasswordModal])
 
   // Parser CSV simples com suporte a aspas, vírgulas e CRLF
   const parseCSV = (text: string) => {
@@ -355,16 +412,16 @@ export default function Employees() {
     }
   }
 
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setSearchTerm('')
     setSelectedDepartment('')
     setSelectedPosition('')
     setSelectedSector('')
     setSelectedStatus('')
     setCurrentPage(1)
-  }
+  }, [])
 
-  const exportFilteredCSV = () => {
+  const exportFilteredCSV = useCallback(() => {
     if (!filteredEmployees.length) {
       toast.info('Nenhum registro para exportar')
       return
@@ -395,7 +452,7 @@ export default function Employees() {
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-  }
+  }, [filteredEmployees])
 
   const paginatedEmployees = useMemo(() => {
     const start = (currentPage - 1) * pageSize
@@ -405,7 +462,7 @@ export default function Employees() {
 
   const totalPages = Math.max(1, Math.ceil(filteredEmployees.length / pageSize))
 
-  const downloadExampleCSV = () => {
+  const downloadExampleCSV = useCallback(() => {
     const csvContent = `name,email,cpf,rg,birth_date,gender,marital_status,address,city,state,zip_code,phone,emergency_contact,emergency_phone,position_id,department_id,sector_id,schedule_id,unit_id,hire_date,salary,bank_name,bank_account,pis
 João Silva,joao.silva@email.com,123.456.789-00,12.345.678-9,1990-05-15,M,solteiro,Rua das Flores 123,São Paulo,SP,01234-567,(11) 98765-4321,Maria Silva,(11) 91234-5678,1,1,1,1,1,2024-01-15,3500.00,Banco do Brasil,12345-6,123.45678.90-1
 Maria Santos,maria.santos@email.com,987.654.321-00,98.765.432-1,1985-08-20,F,casado,Av. Paulista 1000,São Paulo,SP,01310-100,(11) 99876-5432,José Santos,(11) 92345-6789,2,2,2,1,1,2024-02-01,4200.00,Caixa Econômica,54321-0,987.65432.10-9
@@ -422,7 +479,7 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-  }
+  }, [])
 
   if (loading) {
     return (
@@ -748,33 +805,15 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
             <div className="p-6">
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center">
-                  {employee.photo_url ? (
-                    <div className="relative">
-                      <img
-                        src={employee.photo_url}
-                        alt={employee.name}
-                        className="w-14 h-14 rounded-full object-cover border-3 border-white dark:border-gray-600 shadow-md group-hover:scale-110 transition-transform duration-300"
-                      />
-                      <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white dark:border-gray-700 ${
-                        employee.status === 'active' ? 'bg-green-500' : 'bg-gray-400'
-                      }`}></div>
-                    </div>
-                  ) : (
-                    <div className={`relative bg-gradient-to-br ${
-                      employee.status === 'active'
-                        ? 'from-blue-100 to-purple-100 dark:from-blue-900/30 dark:to-purple-900/30'
-                        : 'from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-600'
-                    } p-3 rounded-full group-hover:scale-110 transition-transform duration-300 shadow-md`}>
-                      <UserCircle className={`w-8 h-8 ${
-                        employee.status === 'active'
-                          ? 'text-purple-600 dark:text-purple-400'
-                          : 'text-gray-500 dark:text-gray-400'
-                      }`} />
-                      <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white dark:border-gray-700 ${
-                        employee.status === 'active' ? 'bg-green-500' : 'bg-gray-400'
-                      }`}></div>
-                    </div>
-                  )}
+                  <div className="group-hover:scale-110 transition-transform duration-300">
+                    <Avatar
+                      name={employee.name}
+                      photoUrl={employee.photo_url}
+                      size="lg"
+                      showStatus
+                      isActive={employee.status === 'active'}
+                    />
+                  </div>
                   <div className="ml-3">
                     <h3 className="font-bold text-gray-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">
                       {employee.name}
@@ -822,6 +861,14 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                 >
                   <Camera className="w-4 h-4 mr-1" />
                   Face
+                </button>
+                <button
+                  onClick={() => handleResetPassword(employee)}
+                  className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 text-amber-700 dark:text-amber-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
+                  title="Redefinir Senha"
+                >
+                  <Key className="w-4 h-4 mr-1" />
+                  Senha
                 </button>
                 <button
                   onClick={() => handleEdit(employee)}
@@ -885,17 +932,13 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
-                        {employee.photo_url ? (
-                          <img
-                            src={employee.photo_url}
-                            alt={employee.name}
-                            className="w-10 h-10 rounded-full object-cover border-2 border-purple-200 dark:border-purple-800"
-                          />
-                        ) : (
-                          <div className="bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 p-2 rounded-full">
-                            <UserCircle className="w-6 h-6 text-purple-600 dark:text-purple-400" />
-                          </div>
-                        )}
+                        <Avatar
+                          name={employee.name}
+                          photoUrl={employee.photo_url}
+                          size="sm"
+                          showStatus
+                          isActive={employee.status === 'active'}
+                        />
                         <div className="ml-4">
                           <div className="text-sm font-semibold text-gray-900 dark:text-white">
                             {employee.name}
@@ -955,6 +998,13 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                           title="Cadastrar Face"
                         >
                           <Camera className="w-5 h-5" />
+                        </button>
+                        <button
+                          onClick={() => handleResetPassword(employee)}
+                          className="p-2 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-all duration-200"
+                          title="Redefinir Senha do Portal"
+                        >
+                          <Key className="w-5 h-5" />
                         </button>
                         <button
                           onClick={() => handleEdit(employee)}
@@ -1035,6 +1085,95 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
           onClose={() => { setFaceModalOpen(false); setFaceEmployee(null); }}
           onSuccess={() => { loadEmployees(); }}
         />
+      )}
+
+      {/* Modal de Redefinição de Senha */}
+      {resetPasswordModal.isOpen && resetPasswordModal.employee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-3 bg-amber-100 dark:bg-amber-900/30 rounded-xl">
+                <Key className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+                  Redefinir Senha do Portal
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {resetPasswordModal.employee.name}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Nova Senha
+                </label>
+                <input
+                  type="password"
+                  value={resetPasswordModal.newPassword}
+                  onChange={(e) => setResetPasswordModal(prev => ({ ...prev, newPassword: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                  placeholder="Mínimo 6 caracteres"
+                  minLength={6}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Confirmar Nova Senha
+                </label>
+                <input
+                  type="password"
+                  value={resetPasswordModal.confirmPassword}
+                  onChange={(e) => setResetPasswordModal(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                  placeholder="Repita a senha"
+                />
+              </div>
+
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3">
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  ⚠️ O funcionário precisará trocar a senha no próximo login no portal.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setResetPasswordModal({
+                  isOpen: false,
+                  employee: null,
+                  newPassword: '',
+                  confirmPassword: '',
+                  loading: false
+                })}
+                disabled={resetPasswordModal.loading}
+                className="flex-1 px-4 py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-all font-medium disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmResetPassword}
+                disabled={resetPasswordModal.loading || !resetPasswordModal.newPassword || !resetPasswordModal.confirmPassword}
+                className="flex-1 px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl hover:from-amber-600 hover:to-orange-600 transition-all font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {resetPasswordModal.loading ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <Key className="w-5 h-5" />
+                    Redefinir Senha
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -2,7 +2,7 @@
  * Utilidades para logging em produção
  */
 
-export const logger = {
+const logger = {
   info: (message, data = {}) => {
     const timestamp = new Date().toISOString();
     console.log(JSON.stringify({
@@ -49,6 +49,12 @@ export const logger = {
     }
   }
 };
+
+// Export default para import padrão (import logger from)
+export default logger;
+
+// Export named para import com destructuring (import { logger } from)
+export { logger };
 
 /**
  * Middleware para logging de requisições

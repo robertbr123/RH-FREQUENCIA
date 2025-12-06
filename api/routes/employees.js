@@ -2,15 +2,32 @@ import express from 'express';
 import pool from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { checkDepartmentAccess, hasAccessToEmployee } from '../middleware/departmentAccess.js';
+import cache, { CACHE_KEYS, CACHE_TTL } from '../utils/cache.js';
+import { getPaginationParams, formatPaginatedResponse, getSearchParams, getSortParams } from '../utils/pagination.js';
+import { logger } from '../utils/logger.js';
 
 const router = express.Router();
 
-// Listar todos os funcionários (gestores veem apenas seu departamento)
+// Campos permitidos para ordenação
+const ALLOWED_SORT_FIELDS = ['name', 'email', 'hire_date', 'department_name', 'position_name', 'created_at'];
+
+// Listar funcionários com paginação, busca e cache
 router.get('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
-  const { status } = req.query;
+  const { status, paginate } = req.query;
   
   try {
-    let query = `SELECT e.*, 
+    // Parâmetros de paginação (opcional - mantém retrocompatibilidade)
+    const usePagination = paginate === 'true' || req.query.page || req.query.limit;
+    const pagination = usePagination ? getPaginationParams(req.query, { limit: 50 }) : null;
+    
+    // Parâmetros de ordenação
+    const sort = getSortParams(req.query, ALLOWED_SORT_FIELDS, 'name', 'ASC');
+    
+    // Parâmetros de busca
+    const search = getSearchParams(req.query, ['e.name', 'e.email', 'e.cpf']);
+
+    // Construir query base
+    let baseQuery = `SELECT e.*, 
                         p.name as position_name,
                         d.name as department_name,
                         s.name as sector_name,
@@ -20,30 +37,68 @@ router.get('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
                  LEFT JOIN departments d ON e.department_id = d.id
                  LEFT JOIN sectors s ON e.sector_id = s.id
                  LEFT JOIN units u ON e.unit_id = u.id`;
+    
+    const conditions = [];
     const params = [];
     let paramCount = 1;
 
-    // Se é gestor, filtrar por seu departamento
+    // Filtro por departamento (gestor)
     if (req.user.role === 'gestor') {
-      query += ` WHERE e.department_id = $${paramCount}`;
-      params.push(req.userDepartmentId);
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      conditions.push(`e.department_id = ANY($${paramCount})`);
+      params.push(deptIds);
       paramCount++;
-
-      if (status) {
-        query += ` AND e.status = $${paramCount}`;
-        params.push(status);
-      }
-    } else if (status) {
-      query += ` WHERE e.status = $${paramCount}`;
-      params.push(status);
     }
 
-    query += ' ORDER BY e.name ASC';
+    // Filtro por status
+    if (status) {
+      conditions.push(`e.status = $${paramCount}`);
+      params.push(status);
+      paramCount++;
+    }
 
-    const result = await pool.query(query, params);
+    // Filtro de busca
+    if (search) {
+      const searchConditions = ['e.name', 'e.email', 'e.cpf'].map(() => {
+        const condition = `LOWER(COALESCE(e.name, '')) LIKE LOWER($${paramCount}) OR LOWER(COALESCE(e.email, '')) LIKE LOWER($${paramCount}) OR LOWER(COALESCE(e.cpf, '')) LIKE LOWER($${paramCount})`;
+        return condition;
+      });
+      conditions.push(`(${searchConditions[0]})`);
+      params.push(`%${search.term}%`);
+      paramCount++;
+    }
+
+    // Montar WHERE
+    if (conditions.length > 0) {
+      baseQuery += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    // Se usar paginação
+    if (usePagination) {
+      // Query de contagem
+      const countQuery = `SELECT COUNT(*) as total FROM employees e
+                          LEFT JOIN departments d ON e.department_id = d.id
+                          ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}`;
+      
+      const countResult = await pool.query(countQuery, params);
+      const total = parseInt(countResult.rows[0].total, 10);
+
+      // Query com paginação
+      const dataQuery = `${baseQuery} ${sort.sql} LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+      const dataParams = [...params, pagination.limit, pagination.offset];
+      
+      const result = await pool.query(dataQuery, dataParams);
+      
+      return res.json(formatPaginatedResponse(result.rows, total, pagination));
+    }
+
+    // Sem paginação (retrocompatibilidade)
+    baseQuery += ` ${sort.sql}`;
+    const result = await pool.query(baseQuery, params);
     res.json(result.rows);
+    
   } catch (error) {
-    console.error('Erro ao buscar funcionários:', error);
+    logger.error('Erro ao buscar funcionários', error);
     res.status(500).json({ error: 'Erro ao buscar funcionários' });
   }
 });
@@ -72,11 +127,12 @@ router.get('/:id', authenticateToken, checkDepartmentAccess, async (req, res) =>
 
     const employee = result.rows[0];
 
-    // Validar acesso (gestor só vê seu departamento)
+    // Validar acesso (gestor só vê seus departamentos)
+    const deptIds = req.userDepartmentIds || [req.userDepartmentId];
     const hasAccess = await hasAccessToEmployee(
       employee.department_id,
       req.user.role,
-      req.userDepartmentId
+      deptIds
     );
 
     if (!hasAccess) {
@@ -85,7 +141,7 @@ router.get('/:id', authenticateToken, checkDepartmentAccess, async (req, res) =>
 
     res.json(employee);
   } catch (error) {
-    console.error('Erro ao buscar funcionário:', error);
+    logger.error('Erro ao buscar funcionário', error);
     res.status(500).json({ error: 'Erro ao buscar funcionário' });
   }
 });
@@ -100,11 +156,14 @@ router.post('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
   } = req.body;
 
   try {
-    // Validar acesso ao departamento
-    if (req.user.role === 'gestor' && department_id !== req.userDepartmentId) {
-      return res.status(403).json({ 
-        error: 'Você só pode criar funcionários no seu departamento' 
-      });
+    // Validar acesso ao departamento (gestor pode criar em qualquer um dos seus departamentos)
+    if (req.user.role === 'gestor') {
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      if (!deptIds.includes(department_id)) {
+        return res.status(403).json({ 
+          error: 'Você só pode criar funcionários nos seus departamentos' 
+        });
+      }
     }
 
     const result = await pool.query(
@@ -128,7 +187,7 @@ router.post('/', authenticateToken, checkDepartmentAccess, async (req, res) => {
     if (error.code === '23505') {
       return res.status(400).json({ error: 'Email ou CPF já cadastrado' });
     }
-    console.error('Erro ao criar funcionário:', error);
+    logger.error('Erro ao criar funcionário', error);
     res.status(400).json({ error: error.message || 'Erro ao criar funcionário' });
   }
 });
@@ -155,14 +214,16 @@ router.put('/:id', authenticateToken, checkDepartmentAccess, async (req, res) =>
 
     const employeeDepartmentId = employeeCheck.rows[0].department_id;
 
-    // Validar acesso (gestor não pode alterar departamento ou funcionários de outros departamentos)
+    // Validar acesso (gestor pode gerenciar funcionários dos seus departamentos)
     if (req.user.role === 'gestor') {
-      if (employeeDepartmentId !== req.userDepartmentId) {
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      if (!deptIds.includes(employeeDepartmentId)) {
         return res.status(403).json({ error: 'Acesso negado a este funcionário' });
       }
-      if (department_id && department_id !== req.userDepartmentId) {
+      // Gestor pode mover funcionário entre seus departamentos
+      if (department_id && !deptIds.includes(department_id)) {
         return res.status(403).json({ 
-          error: 'Você não pode mover funcionários para outro departamento' 
+          error: 'Você só pode mover funcionários para departamentos que você gerencia' 
         });
       }
     }
@@ -195,7 +256,7 @@ router.put('/:id', authenticateToken, checkDepartmentAccess, async (req, res) =>
     if (error.code === '23505') {
       return res.status(400).json({ error: 'Email ou CPF já cadastrado' });
     }
-    console.error('Erro ao atualizar funcionário:', error);
+    logger.error('Erro ao atualizar funcionário', error);
     res.status(400).json({ error: error.message || 'Erro ao atualizar funcionário' });
   }
 });
@@ -213,8 +274,11 @@ router.delete('/:id', authenticateToken, checkDepartmentAccess, async (req, res)
       return res.status(404).json({ error: 'Funcionário não encontrado' });
     }
 
-    if (req.user.role === 'gestor' && employeeCheck.rows[0].department_id !== req.userDepartmentId) {
-      return res.status(403).json({ error: 'Acesso negado a este funcionário' });
+    if (req.user.role === 'gestor') {
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      if (!deptIds.includes(employeeCheck.rows[0].department_id)) {
+        return res.status(403).json({ error: 'Acesso negado a este funcionário' });
+      }
     }
 
     const result = await pool.query(
@@ -228,7 +292,7 @@ router.delete('/:id', authenticateToken, checkDepartmentAccess, async (req, res)
 
     res.json({ message: 'Funcionário desativado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar funcionário:', error);
+    logger.error('Erro ao deletar funcionário', error);
     res.status(500).json({ error: 'Erro ao deletar funcionário' });
   }
 });
@@ -273,7 +337,7 @@ router.post('/:id/photo', authenticateToken, async (req, res) => {
       photo_url: photo_url
     });
   } catch (error) {
-    console.error('Erro ao fazer upload de foto:', error);
+    logger.error('Erro ao fazer upload de foto', error);
     res.status(500).json({ error: 'Erro ao fazer upload de foto' });
   }
 });

@@ -19,7 +19,25 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     const result = await pool.query(
       `SELECT id, username, name, email, role, department_id, status, created_at FROM users ORDER BY name ASC`
     );
-    res.json(result.rows);
+    
+    // Buscar departamentos de cada usuário gestor
+    const usersWithDepartments = await Promise.all(
+      result.rows.map(async (user) => {
+        if (user.role === 'gestor') {
+          const deptResult = await pool.query(
+            `SELECT d.id, d.name 
+             FROM user_departments ud 
+             JOIN departments d ON ud.department_id = d.id 
+             WHERE ud.user_id = $1`,
+            [user.id]
+          );
+          return { ...user, departments: deptResult.rows };
+        }
+        return { ...user, departments: [] };
+      })
+    );
+    
+    res.json(usersWithDepartments);
   } catch (error) {
     console.error('Erro ao buscar usuários:', error);
     res.status(500).json({ error: 'Erro ao buscar usuários' });
@@ -43,7 +61,25 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    res.json(result.rows[0]);
+    const user = result.rows[0];
+    
+    // Buscar departamentos se for gestor
+    if (user.role === 'gestor') {
+      const deptResult = await pool.query(
+        `SELECT d.id, d.name 
+         FROM user_departments ud 
+         JOIN departments d ON ud.department_id = d.id 
+         WHERE ud.user_id = $1`,
+        [user.id]
+      );
+      user.departments = deptResult.rows;
+      user.department_ids = deptResult.rows.map(d => d.id);
+    } else {
+      user.departments = [];
+      user.department_ids = [];
+    }
+
+    res.json(user);
   } catch (error) {
     console.error('Erro ao buscar usuário:', error);
     res.status(500).json({ error: 'Erro ao buscar usuário' });
@@ -52,7 +88,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 // Criar novo usuário (apenas admin)
 router.post('/', authenticateToken, isAdmin, async (req, res) => {
-  const { username, password, name, email, role, department_id } = req.body;
+  const { username, password, name, email, role, department_id, department_ids } = req.body;
 
   try {
     // Validar campos obrigatórios
@@ -68,34 +104,64 @@ router.post('/', authenticateToken, isAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Nível de acesso inválido' });
     }
 
-    // Se é gestor, department_id é obrigatório
-    if (role === 'gestor' && !department_id) {
+    // Usar department_ids (array) se fornecido, senão usar department_id (legacy)
+    const deptIds = department_ids || (department_id ? [department_id] : []);
+
+    // Se é gestor, pelo menos um departamento é obrigatório
+    if (role === 'gestor' && deptIds.length === 0) {
       return res.status(400).json({ 
-        error: 'Departamento é obrigatório para gestores' 
+        error: 'Pelo menos um departamento é obrigatório para gestores' 
       });
     }
 
-    // Validar se departamento existe (quando informado)
-    if (department_id) {
+    // Validar se departamentos existem
+    if (deptIds.length > 0) {
       const deptCheck = await pool.query(
-        'SELECT id FROM departments WHERE id = $1',
-        [department_id]
+        'SELECT id FROM departments WHERE id = ANY($1)',
+        [deptIds]
       );
-      if (deptCheck.rows.length === 0) {
-        return res.status(400).json({ error: 'Departamento não encontrado' });
+      if (deptCheck.rows.length !== deptIds.length) {
+        return res.status(400).json({ error: 'Um ou mais departamentos não encontrados' });
       }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    // Criar usuário (manter department_id para compatibilidade)
+    const primaryDeptId = deptIds.length > 0 ? deptIds[0] : null;
     const result = await pool.query(
       `INSERT INTO users (username, password, name, email, role, department_id, status) 
        VALUES ($1, $2, $3, $4, $5, $6, 'active') 
        RETURNING id, username, name, email, role, department_id, status, created_at`,
-      [username, hashedPassword, name, email || null, role, department_id || null]
+      [username, hashedPassword, name, email || null, role, primaryDeptId]
     );
 
-    res.status(201).json(result.rows[0]);
+    const newUser = result.rows[0];
+
+    // Inserir relacionamentos de departamentos para gestor
+    if (role === 'gestor' && deptIds.length > 0) {
+      for (const deptId of deptIds) {
+        await pool.query(
+          'INSERT INTO user_departments (user_id, department_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [newUser.id, deptId]
+        );
+      }
+      
+      // Retornar com departamentos
+      const deptResult = await pool.query(
+        `SELECT d.id, d.name FROM user_departments ud 
+         JOIN departments d ON ud.department_id = d.id 
+         WHERE ud.user_id = $1`,
+        [newUser.id]
+      );
+      newUser.departments = deptResult.rows;
+      newUser.department_ids = deptResult.rows.map(d => d.id);
+    } else {
+      newUser.departments = [];
+      newUser.department_ids = [];
+    }
+
+    res.status(201).json(newUser);
   } catch (error) {
     if (error.code === '23505') { // Unique violation
       return res.status(400).json({ error: 'Usuário ou email já existe' });
@@ -107,7 +173,7 @@ router.post('/', authenticateToken, isAdmin, async (req, res) => {
 
 // Atualizar usuário (admin pode atualizar todos, usuário pode atualizar apenas seu perfil)
 router.put('/:id', authenticateToken, async (req, res) => {
-  const { name, email, role, status, department_id } = req.body;
+  const { name, email, role, status, department_id, department_ids } = req.body;
   const userId = parseInt(req.params.id);
 
   try {
@@ -119,31 +185,37 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    // Se é gestor, validar department_id
-    if (role === 'gestor' && !department_id) {
+    // Usar department_ids (array) se fornecido, senão usar department_id (legacy)
+    const deptIds = department_ids || (department_id ? [department_id] : []);
+
+    // Se é gestor, validar departamentos
+    if (role === 'gestor' && deptIds.length === 0) {
       return res.status(400).json({ 
-        error: 'Departamento é obrigatório para gestores' 
+        error: 'Pelo menos um departamento é obrigatório para gestores' 
       });
     }
 
-    if (department_id) {
+    // Validar se departamentos existem
+    if (deptIds.length > 0) {
       const deptCheck = await pool.query(
-        'SELECT id FROM departments WHERE id = $1',
-        [department_id]
+        'SELECT id FROM departments WHERE id = ANY($1)',
+        [deptIds]
       );
-      if (deptCheck.rows.length === 0) {
-        return res.status(400).json({ error: 'Departamento não encontrado' });
+      if (deptCheck.rows.length !== deptIds.length) {
+        return res.status(400).json({ error: 'Um ou mais departamentos não encontrados' });
       }
     }
 
     // Apenas admin pode alterar role, status e department
     let query, params;
+    const primaryDeptId = deptIds.length > 0 ? deptIds[0] : null;
+    
     if (isAdminUser) {
       query = `UPDATE users 
                SET name = $1, email = $2, role = $3, status = $4, department_id = $5 
                WHERE id = $6 
                RETURNING id, username, name, email, role, department_id, status, created_at`;
-      params = [name, email, role, status, department_id || null, userId];
+      params = [name, email, role, status, primaryDeptId, userId];
     } else {
       // Usuário comum só pode alterar nome e email
       query = `UPDATE users 
@@ -159,7 +231,41 @@ router.put('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    res.json(result.rows[0]);
+    const updatedUser = result.rows[0];
+
+    // Atualizar relacionamentos de departamentos se for admin editando
+    if (isAdminUser && role === 'gestor') {
+      // Remover departamentos antigos
+      await pool.query('DELETE FROM user_departments WHERE user_id = $1', [userId]);
+      
+      // Inserir novos departamentos
+      for (const deptId of deptIds) {
+        await pool.query(
+          'INSERT INTO user_departments (user_id, department_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [userId, deptId]
+        );
+      }
+      
+      // Retornar com departamentos
+      const deptResult = await pool.query(
+        `SELECT d.id, d.name FROM user_departments ud 
+         JOIN departments d ON ud.department_id = d.id 
+         WHERE ud.user_id = $1`,
+        [userId]
+      );
+      updatedUser.departments = deptResult.rows;
+      updatedUser.department_ids = deptResult.rows.map(d => d.id);
+    } else if (isAdminUser && role !== 'gestor') {
+      // Se mudou de gestor para outro role, remover departamentos
+      await pool.query('DELETE FROM user_departments WHERE user_id = $1', [userId]);
+      updatedUser.departments = [];
+      updatedUser.department_ids = [];
+    } else {
+      updatedUser.departments = [];
+      updatedUser.department_ids = [];
+    }
+
+    res.json(updatedUser);
   } catch (error) {
     if (error.code === '23505') {
       return res.status(400).json({ error: 'Email já está em uso' });

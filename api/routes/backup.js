@@ -1,8 +1,44 @@
 import express from 'express';
 import pool from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
+
+// Lista completa de tabelas do sistema (ordem de dependência para restore)
+const ALL_TABLES = [
+  // Tabelas base (sem dependências)
+  'users',
+  'positions',
+  'departments',
+  'sectors',
+  'schedules',
+  'units',
+  'holidays',
+  'system_settings',
+  'role_permissions',
+  'allowed_locations',
+  'faq',
+  
+  // Tabelas com dependência de tabelas base
+  'employees',
+  'user_departments',
+  
+  // Tabelas com dependência de employees
+  'attendance',
+  'attendance_punches',
+  'employee_absences',
+  'employee_vacations',
+  'employee_portal_credentials',
+  'employee_requests',
+  'employee_notifications',
+  'employee_notification_settings',
+  'push_subscriptions',
+  
+  // Tabelas de chat
+  'chat_conversations',
+  'chat_messages',
+];
 
 // Gerar backup completo do banco (apenas admin)
 router.post('/export', authenticateToken, async (req, res) => {
@@ -19,23 +55,11 @@ router.post('/export', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Apenas administradores podem gerar backups' });
     }
 
-    console.log('🔄 Gerando backup do banco de dados...');
+    logger.info('Gerando backup do banco de dados...');
 
-    // Buscar todas as tabelas
-    const tables = [
-      'users',
-      'employees',
-      'positions',
-      'departments',
-      'sectors',
-      'schedules',
-      'units',
-      'attendance',
-      'attendance_punches',
-      'holidays',
-      'absences',
-      'organization_settings'
-    ];
+    // Usar lista completa de tabelas
+    const tables = ALL_TABLES;
+    let exportedTables = 0;
 
     let sqlBackup = `-- BACKUP DO BANCO DE DADOS\n`;
     sqlBackup += `-- Data: ${new Date().toISOString()}\n`;
@@ -55,7 +79,8 @@ router.post('/export', authenticateToken, async (req, res) => {
           continue;
         }
 
-        sqlBackup += `-- Dados da tabela: ${table}\n`;
+        exportedTables++;
+        sqlBackup += `-- Dados da tabela: ${table} (${result.rows.length} registros)\n`;
         sqlBackup += `DELETE FROM ${table};\n`;
 
         const columns = Object.keys(result.rows[0]);
@@ -78,7 +103,7 @@ router.post('/export', authenticateToken, async (req, res) => {
 
         sqlBackup += `\n`;
       } catch (error) {
-        console.log(`Tabela ${table} não existe ou erro ao exportar:`, error.message);
+        logger.debug(`Tabela ${table} não existe ou erro ao exportar:`, { error: error.message });
         sqlBackup += `-- Tabela ${table} não encontrada\n\n`;
       }
     }
@@ -90,20 +115,21 @@ router.post('/export', authenticateToken, async (req, res) => {
     // Resetar sequences
     sqlBackup += `-- Resetar sequences\n`;
     for (const table of tables) {
-      sqlBackup += `SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${table}), 1), true);\n`;
+      sqlBackup += `DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = '${table}' AND column_name = 'id') THEN PERFORM setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${table}), 1), true); END IF; END $$;\n`;
     }
 
-    console.log('✅ Backup gerado com sucesso!');
+    logger.info('Backup gerado com sucesso!', { tables: exportedTables });
 
     res.json({
       success: true,
       backup: sqlBackup,
-      tables: tables.length,
+      tables: exportedTables,
+      totalTables: tables.length,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('❌ Erro ao gerar backup:', error);
+    logger.error('Erro ao gerar backup:', error);
     res.status(500).json({ 
       error: 'Erro ao gerar backup',
       details: error.message 
@@ -131,12 +157,25 @@ router.post('/restore', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Apenas administradores podem restaurar backups' });
     }
 
-    console.log('🔄 Restaurando backup do banco de dados...');
+    // Validação básica de segurança - verificar se é um backup válido do sistema
+    if (!sqlBackup.includes('-- BACKUP DO BANCO DE DADOS') && !sqlBackup.includes('-- Sistema: RHF')) {
+      return res.status(400).json({ error: 'Arquivo de backup inválido ou não reconhecido' });
+    }
+
+    // Bloquear comandos perigosos
+    const dangerousCommands = ['DROP DATABASE', 'DROP SCHEMA', 'TRUNCATE', 'ALTER USER', 'CREATE USER', 'GRANT', 'REVOKE'];
+    for (const cmd of dangerousCommands) {
+      if (sqlBackup.toUpperCase().includes(cmd)) {
+        return res.status(400).json({ error: `Comando não permitido detectado: ${cmd}` });
+      }
+    }
+
+    logger.info('Restaurando backup do banco de dados...', { userId });
 
     // Executar SQL de restore
     await pool.query(sqlBackup);
 
-    console.log('✅ Backup restaurado com sucesso!');
+    logger.info('Backup restaurado com sucesso!');
 
     res.json({
       success: true,
@@ -145,7 +184,7 @@ router.post('/restore', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erro ao restaurar backup:', error);
+    logger.error('Erro ao restaurar backup:', error);
     res.status(500).json({ 
       error: 'Erro ao restaurar backup',
       details: error.message 
@@ -168,35 +207,26 @@ router.get('/info', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Apenas administradores podem acessar informações do banco' });
     }
 
-    // Buscar informações de cada tabela
-    const tables = [
-      'users',
-      'employees',
-      'positions',
-      'departments',
-      'sectors',
-      'schedules',
-      'units',
-      'attendance',
-      'attendance_punches',
-      'holidays',
-      'absences',
-      'organization_settings'
-    ];
+    // Usar lista completa de tabelas
+    const tables = ALL_TABLES;
 
     const tableInfo = [];
+    let existingTables = 0;
 
     for (const table of tables) {
       try {
         const result = await pool.query(`SELECT COUNT(*) as count FROM ${table}`);
         tableInfo.push({
           name: table,
-          rows: parseInt(result.rows[0].count)
+          rows: parseInt(result.rows[0].count),
+          exists: true
         });
+        existingTables++;
       } catch (error) {
         tableInfo.push({
           name: table,
           rows: 0,
+          exists: false,
           error: 'Tabela não encontrada'
         });
       }
@@ -205,12 +235,13 @@ router.get('/info', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       tables: tableInfo,
-      totalTables: tableInfo.length,
+      totalTables: tables.length,
+      existingTables,
       totalRows: tableInfo.reduce((sum, t) => sum + t.rows, 0)
     });
 
   } catch (error) {
-    console.error('❌ Erro ao buscar informações do banco:', error);
+    logger.error('Erro ao buscar informações do banco:', error);
     res.status(500).json({ 
       error: 'Erro ao buscar informações',
       details: error.message 

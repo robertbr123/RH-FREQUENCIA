@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -34,7 +35,7 @@ router.get('/employee/:employeeId', authenticateToken, async (req, res) => {
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (error) {
-    console.error('Erro ao buscar ausências:', error);
+    logger.error('Erro ao buscar ausências', error);
     res.status(500).json({ error: 'Erro ao buscar ausências' });
   }
 });
@@ -75,7 +76,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (error) {
-    console.error('Erro ao buscar ausências:', error);
+    logger.error('Erro ao buscar ausências', error);
     res.status(500).json({ error: 'Erro ao buscar ausências' });
   }
 });
@@ -125,7 +126,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
     res.json({ success: true, absence: result.rows[0] });
   } catch (error) {
-    console.error('Erro ao criar ausência:', error);
+    logger.error('Erro ao criar ausência', error);
     res.status(500).json({ error: 'Erro ao criar ausência' });
   }
 });
@@ -158,7 +159,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     res.json({ success: true, absence: result.rows[0] });
   } catch (error) {
-    console.error('Erro ao atualizar ausência:', error);
+    logger.error('Erro ao atualizar ausência', error);
     res.status(500).json({ error: 'Erro ao atualizar ausência' });
   }
 });
@@ -179,7 +180,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
     res.json({ success: true, message: 'Ausência excluída com sucesso' });
   } catch (error) {
-    console.error('Erro ao excluir ausência:', error);
+    logger.error('Erro ao excluir ausência', error);
     res.status(500).json({ error: 'Erro ao excluir ausência' });
   }
 });
@@ -201,7 +202,7 @@ router.get('/check/:employeeId/:date', authenticateToken, async (req, res) => {
       absence: result.rows[0] || null
     });
   } catch (error) {
-    console.error('Erro ao verificar ausência:', error);
+    logger.error('Erro ao verificar ausência', error);
     res.status(500).json({ error: 'Erro ao verificar ausência' });
   }
 });

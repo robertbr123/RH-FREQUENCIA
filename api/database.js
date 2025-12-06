@@ -7,16 +7,18 @@ dotenv.config();
 
 const { Pool } = pg;
 
-// Configuração otimizada para Vercel Serverless
+// Configuração ULTRA otimizada para Vercel Serverless com Neon
+// IMPORTANTE: Use a connection string do POOLER do Neon (porta 6543) ao invés da direta (5432)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false
   },
-  // Configurações otimizadas para serverless
-  max: 10, // Reduzido para serverless
-  idleTimeoutMillis: 20000, // 20 segundos
-  connectionTimeoutMillis: 5000, // 5 segundos
+  // Configurações MÍNIMAS para serverless - evitar "too many clients"
+  max: 1, // Apenas 1 conexão por instância serverless
+  min: 0, // Não manter conexões ociosas
+  idleTimeoutMillis: 1000, // 1 segundo - libera IMEDIATAMENTE
+  connectionTimeoutMillis: 10000, // 10 segundos para conectar
   allowExitOnIdle: true // Permite encerrar conexões idle em serverless
 });
 
@@ -27,6 +29,7 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('❌ Erro no pool de conexões:', err);
+  // Tentar reconectar fechando conexões problemáticas
 });
 
 // Graceful shutdown para serverless
@@ -35,10 +38,42 @@ process.on('SIGTERM', async () => {
   await pool.end();
 });
 
+// Helper para executar query com retry automático
+export const queryWithRetry = async (text, params, retries = 3) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await pool.query(text, params);
+    } catch (error) {
+      if (error.code === '53300' && i < retries - 1) {
+        // Too many clients - aguardar e tentar novamente
+        console.log(`⚠️ Too many clients, retry ${i + 1}/${retries}...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
+// Cache para evitar múltiplas inicializações
+let isInitialized = false;
+let initPromise = null;
+
 export const initDatabase = async () => {
-  const client = await pool.connect();
+  // Se já foi inicializado, retorna
+  if (isInitialized) {
+    return;
+  }
   
-  try {
+  // Se já está inicializando, aguarda a promessa existente
+  if (initPromise) {
+    return initPromise;
+  }
+  
+  initPromise = (async () => {
+    const client = await pool.connect();
+    
+    try {
     await client.query('BEGIN');
 
     // Tabela de usuários (administradores, gestores, operadores)
@@ -217,13 +252,18 @@ export const initDatabase = async () => {
 
     await client.query('COMMIT');
     console.log('✅ Banco de dados inicializado com sucesso');
+    isInitialized = true;
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('❌ Erro ao inicializar banco de dados:', error);
+    initPromise = null; // Reset para permitir retry
     throw error;
   } finally {
     client.release();
   }
+  })();
+  
+  return initPromise;
 };
 
 export default pool;

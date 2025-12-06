@@ -1,0 +1,59 @@
+{
+  "name": "Portal do Funcionário",
+  "short_name": "Meu Ponto",
+  "description": "Portal do Funcionário - Registro de Ponto e Consultas",
+  "start_url": "/portal",
+  "scope": "/portal",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/portal-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/portal-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Registrar Ponto",
+      "short_name": "Ponto",
+      "description": "Registrar ponto por reconhecimento facial",
+      "url": "/portal/punch",
+      "icons": [{
+        "src": "/portal-icon-192.png",
+        "sizes": "192x192"
+      }]
+    },
+    {
+      "name": "Minha Frequência",
+      "short_name": "Frequência",
+      "description": "Ver histórico de frequência",
+      "url": "/portal/attendance",
+      "icons": [{
+        "src": "/portal-icon-192.png",
+        "sizes": "192x192"
+      }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/portal-dashboard.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Dashboard do Portal"
+    }
+  ],
+  "prefer_related_applications": false,
+  "related_applications": []
+}

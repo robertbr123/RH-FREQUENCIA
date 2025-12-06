@@ -2,6 +2,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import pool from '../database.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -33,6 +34,8 @@ router.post('/login', async (req, res) => {
       { expiresIn: '24h' }
     );
 
+    logger.info('Login realizado', { userId: user.id, username: user.username });
+
     res.json({
       token,
       user: {
@@ -43,7 +46,7 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Erro no login:', error);
+    logger.error('Erro no login', error);
     res.status(500).json({ error: 'Erro no servidor' });
   }
 });
@@ -60,6 +63,8 @@ router.post('/register', async (req, res) => {
       [username, hashedPassword, name, role || 'admin']
     );
 
+    logger.info('Usuário criado', { userId: result.rows[0].id, username });
+
     res.status(201).json({
       message: 'Usuário criado com sucesso',
       user: result.rows[0]
@@ -68,7 +73,7 @@ router.post('/register', async (req, res) => {
     if (error.code === '23505') { // Unique violation
       return res.status(400).json({ error: 'Usuário já existe' });
     }
-    console.error('Erro ao registrar usuário:', error);
+    logger.error('Erro ao registrar usuário', error);
     res.status(500).json({ error: 'Erro ao criar usuário' });
   }
 });

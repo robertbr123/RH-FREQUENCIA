@@ -1,0 +1,10 @@
+export { default as PortalLogin } from './PortalLogin';
+export { default as PortalDashboard } from './PortalDashboard';
+export { default as PortalPunch } from './PortalPunch';
+export { default as PortalChangePassword } from './PortalChangePassword';
+export { default as PortalAttendance } from './PortalAttendance';
+export { default as PortalProfile } from './PortalProfile';
+export { default as PortalHourBank } from './PortalHourBank';
+export { default as PortalVacations } from './PortalVacations';
+export { default as PortalRequests } from './PortalRequests';
+export { default as PortalNotifications } from './PortalNotifications';

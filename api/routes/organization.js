@@ -1,20 +1,27 @@
 import express from 'express';
 import pool from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import cache, { CACHE_KEYS, CACHE_TTL } from '../utils/cache.js';
+import { logger } from '../utils/logger.js';
 
 const router = express.Router();
 
 // ==================== CARGOS ====================
 
-// Listar cargos
+// Listar cargos (com cache)
 router.get('/positions', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM positions ORDER BY name ASC'
+    const data = await cache.getOrFetch(
+      CACHE_KEYS.POSITIONS,
+      async () => {
+        const result = await pool.query('SELECT * FROM positions ORDER BY name ASC');
+        return result.rows;
+      },
+      CACHE_TTL.ORGANIZATION
     );
-    res.json(result.rows);
+    res.json(data);
   } catch (error) {
-    console.error('Erro ao buscar cargos:', error);
+    logger.error('Erro ao buscar cargos', error);
     res.status(500).json({ error: 'Erro ao buscar cargos' });
   }
 });
@@ -27,9 +34,10 @@ router.post('/positions', authenticateToken, async (req, res) => {
       'INSERT INTO positions (name, description) VALUES ($1, $2) RETURNING *',
       [name, description]
     );
+    cache.invalidate(CACHE_KEYS.POSITIONS); // Invalidar cache
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao criar cargo:', error);
+    logger.error('Erro ao criar cargo', error);
     res.status(500).json({ error: 'Erro ao criar cargo' });
   }
 });
@@ -42,9 +50,10 @@ router.put('/positions/:id', authenticateToken, async (req, res) => {
       'UPDATE positions SET name = $1, description = $2 WHERE id = $3 RETURNING *',
       [name, description, req.params.id]
     );
+    cache.invalidate(CACHE_KEYS.POSITIONS); // Invalidar cache
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao atualizar cargo:', error);
+    logger.error('Erro ao atualizar cargo', error);
     res.status(500).json({ error: 'Erro ao atualizar cargo' });
   }
 });
@@ -53,24 +62,30 @@ router.put('/positions/:id', authenticateToken, async (req, res) => {
 router.delete('/positions/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM positions WHERE id = $1', [req.params.id]);
+    cache.invalidate(CACHE_KEYS.POSITIONS); // Invalidar cache
     res.json({ message: 'Cargo deletado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar cargo:', error);
+    logger.error('Erro ao deletar cargo', error);
     res.status(500).json({ error: 'Erro ao deletar cargo' });
   }
 });
 
 // ==================== DEPARTAMENTOS ====================
 
-// Listar departamentos
+// Listar departamentos (com cache)
 router.get('/departments', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM departments ORDER BY name ASC'
+    const data = await cache.getOrFetch(
+      CACHE_KEYS.DEPARTMENTS,
+      async () => {
+        const result = await pool.query('SELECT * FROM departments ORDER BY name ASC');
+        return result.rows;
+      },
+      CACHE_TTL.ORGANIZATION
     );
-    res.json(result.rows);
+    res.json(data);
   } catch (error) {
-    console.error('Erro ao buscar departamentos:', error);
+    logger.error('Erro ao buscar departamentos', error);
     res.status(500).json({ error: 'Erro ao buscar departamentos' });
   }
 });
@@ -83,9 +98,10 @@ router.post('/departments', authenticateToken, async (req, res) => {
       'INSERT INTO departments (name, description) VALUES ($1, $2) RETURNING *',
       [name, description]
     );
+    cache.invalidate(CACHE_KEYS.DEPARTMENTS); // Invalidar cache
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao criar departamento:', error);
+    logger.error('Erro ao criar departamento', error);
     res.status(500).json({ error: 'Erro ao criar departamento' });
   }
 });
@@ -98,9 +114,10 @@ router.put('/departments/:id', authenticateToken, async (req, res) => {
       'UPDATE departments SET name = $1, description = $2 WHERE id = $3 RETURNING *',
       [name, description, req.params.id]
     );
+    cache.invalidate(CACHE_KEYS.DEPARTMENTS); // Invalidar cache
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao atualizar departamento:', error);
+    logger.error('Erro ao atualizar departamento', error);
     res.status(500).json({ error: 'Erro ao atualizar departamento' });
   }
 });
@@ -109,27 +126,35 @@ router.put('/departments/:id', authenticateToken, async (req, res) => {
 router.delete('/departments/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM departments WHERE id = $1', [req.params.id]);
+    cache.invalidate(CACHE_KEYS.DEPARTMENTS); // Invalidar cache
     res.json({ message: 'Departamento deletado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar departamento:', error);
+    logger.error('Erro ao deletar departamento', error);
     res.status(500).json({ error: 'Erro ao deletar departamento' });
   }
 });
 
 // ==================== SETORES ====================
 
-// Listar setores
+// Listar setores (com cache)
 router.get('/sectors', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT s.*, d.name as department_name 
-       FROM sectors s 
-       LEFT JOIN departments d ON s.department_id = d.id 
-       ORDER BY s.name ASC`
+    const data = await cache.getOrFetch(
+      CACHE_KEYS.SECTORS,
+      async () => {
+        const result = await pool.query(
+          `SELECT s.*, d.name as department_name 
+           FROM sectors s 
+           LEFT JOIN departments d ON s.department_id = d.id 
+           ORDER BY s.name ASC`
+        );
+        return result.rows;
+      },
+      CACHE_TTL.ORGANIZATION
     );
-    res.json(result.rows);
+    res.json(data);
   } catch (error) {
-    console.error('Erro ao buscar setores:', error);
+    logger.error('Erro ao buscar setores', error);
     res.status(500).json({ error: 'Erro ao buscar setores' });
   }
 });
@@ -142,9 +167,10 @@ router.post('/sectors', authenticateToken, async (req, res) => {
       'INSERT INTO sectors (name, description, department_id) VALUES ($1, $2, $3) RETURNING *',
       [name, description, department_id]
     );
+    cache.invalidate(CACHE_KEYS.SECTORS); // Invalidar cache
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao criar setor:', error);
+    logger.error('Erro ao criar setor', error);
     res.status(500).json({ error: 'Erro ao criar setor' });
   }
 });
@@ -157,9 +183,10 @@ router.put('/sectors/:id', authenticateToken, async (req, res) => {
       'UPDATE sectors SET name = $1, description = $2, department_id = $3 WHERE id = $4 RETURNING *',
       [name, description, department_id, req.params.id]
     );
+    cache.invalidate(CACHE_KEYS.SECTORS);
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao atualizar setor:', error);
+    logger.error('Erro ao atualizar setor', error);
     res.status(500).json({ error: 'Erro ao atualizar setor' });
   }
 });
@@ -168,24 +195,30 @@ router.put('/sectors/:id', authenticateToken, async (req, res) => {
 router.delete('/sectors/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM sectors WHERE id = $1', [req.params.id]);
+    cache.invalidate(CACHE_KEYS.SECTORS);
     res.json({ message: 'Setor deletado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar setor:', error);
+    logger.error('Erro ao deletar setor', error);
     res.status(500).json({ error: 'Erro ao deletar setor' });
   }
 });
 
 // ==================== HORÁRIOS ====================
 
-// Listar horários
+// Listar horários (com cache)
 router.get('/schedules', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM schedules ORDER BY name ASC'
+    const data = await cache.getOrFetch(
+      CACHE_KEYS.SCHEDULES,
+      async () => {
+        const result = await pool.query('SELECT * FROM schedules ORDER BY name ASC');
+        return result.rows;
+      },
+      CACHE_TTL.ORGANIZATION
     );
-    res.json(result.rows);
+    res.json(data);
   } catch (error) {
-    console.error('Erro ao buscar horários:', error);
+    logger.error('Erro ao buscar horários', error);
     res.status(500).json({ error: 'Erro ao buscar horários' });
   }
 });
@@ -204,7 +237,7 @@ router.get('/schedules/:id', authenticateToken, async (req, res) => {
     
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao buscar horário:', error);
+    logger.error('Erro ao buscar horário', error);
     res.status(500).json({ error: 'Erro ao buscar horário' });
   }
 });
@@ -213,7 +246,6 @@ router.get('/schedules/:id', authenticateToken, async (req, res) => {
 router.post('/schedules', authenticateToken, async (req, res) => {
   const { name, start_time, end_time, break_start, break_end, workdays } = req.body;
   try {
-    // Converter workdays para JSON se for array
     const workdaysJson = Array.isArray(workdays) ? JSON.stringify(workdays) : workdays;
     
     const result = await pool.query(
@@ -221,9 +253,10 @@ router.post('/schedules', authenticateToken, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [name, start_time, end_time, break_start || null, break_end || null, workdaysJson]
     );
+    cache.invalidate(CACHE_KEYS.SCHEDULES);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao criar horário:', error);
+    logger.error('Erro ao criar horário', error);
     res.status(500).json({ error: error.message || 'Erro ao criar horário' });
   }
 });
@@ -232,7 +265,6 @@ router.post('/schedules', authenticateToken, async (req, res) => {
 router.put('/schedules/:id', authenticateToken, async (req, res) => {
   const { name, start_time, end_time, break_start, break_end, workdays } = req.body;
   try {
-    // Converter workdays para JSON se for array
     const workdaysJson = Array.isArray(workdays) ? JSON.stringify(workdays) : workdays;
     
     const result = await pool.query(
@@ -241,9 +273,10 @@ router.put('/schedules/:id', authenticateToken, async (req, res) => {
        WHERE id = $7 RETURNING *`,
       [name, start_time, end_time, break_start || null, break_end || null, workdaysJson, req.params.id]
     );
+    cache.invalidate(CACHE_KEYS.SCHEDULES);
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao atualizar horário:', error);
+    logger.error('Erro ao atualizar horário', error);
     res.status(500).json({ error: error.message || 'Erro ao atualizar horário' });
   }
 });
@@ -252,24 +285,31 @@ router.put('/schedules/:id', authenticateToken, async (req, res) => {
 router.delete('/schedules/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM schedules WHERE id = $1', [req.params.id]);
+    cache.invalidate(CACHE_KEYS.SCHEDULES);
     res.json({ message: 'Horário deletado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar horário:', error);
+    logger.error('Erro ao deletar horário', error);
     res.status(500).json({ error: 'Erro ao deletar horário' });
   }
 });
 
 // ==================== FERIADOS ====================
+const HOLIDAYS_CACHE_KEY = 'holidays';
 
 // Listar feriados
 router.get('/holidays', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM holidays ORDER BY date DESC'
+    const holidays = await cache.getOrFetch(
+      HOLIDAYS_CACHE_KEY,
+      async () => {
+        const result = await pool.query('SELECT * FROM holidays ORDER BY date DESC');
+        return result.rows;
+      },
+      CACHE_TTL.ORGANIZATION
     );
-    res.json(result.rows);
+    res.json(holidays);
   } catch (error) {
-    console.error('Erro ao buscar feriados:', error);
+    logger.error('Erro ao buscar feriados', error);
     res.status(500).json({ error: 'Erro ao buscar feriados' });
   }
 });
@@ -283,9 +323,10 @@ router.post('/holidays', authenticateToken, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [name, date, type, description || null, recurring || false]
     );
+    cache.invalidate(HOLIDAYS_CACHE_KEY);
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao criar feriado:', error);
+    logger.error('Erro ao criar feriado', error);
     res.status(500).json({ error: error.message || 'Erro ao criar feriado' });
   }
 });
@@ -300,9 +341,10 @@ router.put('/holidays/:id', authenticateToken, async (req, res) => {
        WHERE id = $6 RETURNING *`,
       [name, date, type, description || null, recurring || false, req.params.id]
     );
+    cache.invalidate(HOLIDAYS_CACHE_KEY);
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao atualizar feriado:', error);
+    logger.error('Erro ao atualizar feriado', error);
     res.status(500).json({ error: error.message || 'Erro ao atualizar feriado' });
   }
 });
@@ -311,9 +353,10 @@ router.put('/holidays/:id', authenticateToken, async (req, res) => {
 router.delete('/holidays/:id', authenticateToken, async (req, res) => {
   try {
     await pool.query('DELETE FROM holidays WHERE id = $1', [req.params.id]);
+    cache.invalidate(HOLIDAYS_CACHE_KEY);
     res.json({ message: 'Feriado deletado com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar feriado:', error);
+    logger.error('Erro ao deletar feriado', error);
     res.status(500).json({ error: 'Erro ao deletar feriado' });
   }
 });
@@ -346,7 +389,7 @@ router.get('/vacations', authenticateToken, async (req, res) => {
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (error) {
-    console.error('Erro ao buscar férias:', error);
+    logger.error('Erro ao buscar férias', error);
     res.status(500).json({ error: 'Erro ao buscar férias' });
   }
 });
@@ -370,7 +413,7 @@ router.get('/vacations/month/:year/:month', authenticateToken, async (req, res) 
     );
     res.json(result.rows);
   } catch (error) {
-    console.error('Erro ao buscar férias do mês:', error);
+    logger.error('Erro ao buscar férias do mês', error);
     res.status(500).json({ error: 'Erro ao buscar férias do mês' });
   }
 });
@@ -402,7 +445,7 @@ router.post('/vacations', authenticateToken, async (req, res) => {
     
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao criar férias:', error);
+    logger.error('Erro ao criar férias', error);
     res.status(500).json({ error: error.message || 'Erro ao criar férias' });
   }
 });
@@ -434,7 +477,7 @@ router.put('/vacations/:id', authenticateToken, async (req, res) => {
     
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Erro ao atualizar férias:', error);
+    logger.error('Erro ao atualizar férias', error);
     res.status(500).json({ error: error.message || 'Erro ao atualizar férias' });
   }
 });
@@ -445,7 +488,7 @@ router.delete('/vacations/:id', authenticateToken, async (req, res) => {
     await pool.query('DELETE FROM employee_vacations WHERE id = $1', [req.params.id]);
     res.json({ message: 'Férias deletadas com sucesso' });
   } catch (error) {
-    console.error('Erro ao deletar férias:', error);
+    logger.error('Erro ao deletar férias', error);
     res.status(500).json({ error: 'Erro ao deletar férias' });
   }
 });

@@ -204,6 +204,22 @@ code {
   transform-origin: center center;
 }
 
+/* ==========================================
+   ANIMAÇÕES PARA FACE RECOGNITION
+   ========================================== */
+
+.animate-fadeIn {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.animate-slideInUp {
+  animation: slideInUp 0.5s ease-out;
+}
+
+.animate-scaleIn {
+  animation: scaleIn 0.3s ease-out;
+}
+
 /* Suporte para dark mode melhorado */
 @media (prefers-color-scheme: dark) {
   body {

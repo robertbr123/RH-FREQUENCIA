@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Building2, Briefcase, Users, Clock, Plus, Edit, Trash2, Calendar, Umbrella, Layers, MapPin, Award, List, LayoutGrid } from 'lucide-react'
+import { Building2, Briefcase, Users, Clock, Plus, Edit, Trash2, Calendar, Umbrella, Layers, MapPin, Award, List, LayoutGrid, GitBranch, ChevronDown, ChevronRight } from 'lucide-react'
 import { format } from 'date-fns'
 import { toast } from '../utils/toast'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -58,16 +58,18 @@ interface Vacation {
   notes?: string
 }
 
-type TabType = 'positions' | 'departments' | 'sectors' | 'schedules' | 'holidays' | 'vacations'
+type TabType = 'positions' | 'departments' | 'sectors' | 'schedules' | 'holidays' | 'vacations' | 'orgchart'
 
 interface Employee {
   id: number
   name: string
   position_name?: string
+  department_name?: string
+  photo_url?: string
 }
 
 export default function Organization() {
-  const [activeTab, setActiveTab] = useState<TabType>('positions')
+  const [activeTab, setActiveTab] = useState<TabType>('orgchart')
   const [positions, setPositions] = useState<Position[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [sectors, setSectors] = useState<Sector[]>([])
@@ -96,6 +98,19 @@ export default function Organization() {
       const config = { headers: { Authorization: `Bearer ${token}` } }
 
       switch (activeTab) {
+        case 'orgchart':
+          // Carregar todos os dados para o organograma
+          const [posOrgRes, depOrgRes, secOrgRes, empOrgRes] = await Promise.all([
+            axios.get('/api/organization/positions', config),
+            axios.get('/api/organization/departments', config),
+            axios.get('/api/organization/sectors', config),
+            axios.get('/api/employees', config)
+          ])
+          setPositions(posOrgRes.data)
+          setDepartments(depOrgRes.data)
+          setSectors(secOrgRes.data)
+          setEmployees(empOrgRes.data.filter((emp: any) => emp.status === 'active'))
+          break
         case 'positions':
           const posRes = await axios.get('/api/organization/positions', config)
           setPositions(posRes.data)
@@ -183,6 +198,7 @@ export default function Organization() {
   }
 
   const tabs = [
+    { id: 'orgchart', label: 'Organograma', icon: GitBranch },
     { id: 'positions', label: 'Cargos', icon: Briefcase },
     { id: 'departments', label: 'Departamentos', icon: Building2 },
     { id: 'sectors', label: 'Setores', icon: Users },
@@ -297,6 +313,13 @@ export default function Organization() {
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-purple-500 border-t-transparent mb-4"></div>
             <p className="text-gray-600 dark:text-gray-400 font-medium">Carregando...</p>
           </div>
+        ) : activeTab === 'orgchart' ? (
+          <OrgChart 
+            departments={departments} 
+            sectors={sectors} 
+            positions={positions} 
+            employees={employees} 
+          />
         ) : activeTab === 'vacations' ? (
           <div className="p-6">
             {/* Year selector */}
@@ -947,6 +970,219 @@ export default function Organization() {
           }}
         />
       ) : null}
+    </div>
+  )
+}
+
+// Componente de Organograma Visual
+function OrgChart({ 
+  departments, 
+  sectors, 
+  positions, 
+  employees 
+}: { 
+  departments: Department[]
+  sectors: Sector[]
+  positions: Position[]
+  employees: Employee[]
+}) {
+  const [expandedDepts, setExpandedDepts] = useState<number[]>([])
+  const [expandedSectors, setExpandedSectors] = useState<number[]>([])
+
+  const toggleDept = (id: number) => {
+    setExpandedDepts(prev => 
+      prev.includes(id) ? prev.filter(d => d !== id) : [...prev, id]
+    )
+  }
+
+  const toggleSector = (id: number) => {
+    setExpandedSectors(prev => 
+      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+    )
+  }
+
+  // Agrupar funcionários por departamento e setor
+  const getEmployeesByDept = (deptName: string) => 
+    employees.filter(e => e.department_name === deptName)
+
+  // Cores para departamentos
+  const deptColors = [
+    { bg: 'from-blue-500 to-indigo-600', light: 'bg-blue-50 dark:bg-blue-900/20', border: 'border-blue-300 dark:border-blue-700' },
+    { bg: 'from-purple-500 to-pink-600', light: 'bg-purple-50 dark:bg-purple-900/20', border: 'border-purple-300 dark:border-purple-700' },
+    { bg: 'from-green-500 to-emerald-600', light: 'bg-green-50 dark:bg-green-900/20', border: 'border-green-300 dark:border-green-700' },
+    { bg: 'from-amber-500 to-orange-600', light: 'bg-amber-50 dark:bg-amber-900/20', border: 'border-amber-300 dark:border-amber-700' },
+    { bg: 'from-teal-500 to-cyan-600', light: 'bg-teal-50 dark:bg-teal-900/20', border: 'border-teal-300 dark:border-teal-700' },
+    { bg: 'from-rose-500 to-red-600', light: 'bg-rose-50 dark:bg-rose-900/20', border: 'border-rose-300 dark:border-rose-700' },
+  ]
+
+  return (
+    <div className="p-6">
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+          Estrutura Organizacional
+        </h2>
+        <p className="text-gray-600 dark:text-gray-400">
+          Visualize a hierarquia da empresa
+        </p>
+      </div>
+
+      {/* Empresa (Topo) */}
+      <div className="flex justify-center mb-8">
+        <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 rounded-2xl p-6 shadow-xl text-white text-center min-w-[280px]">
+          <div className="p-3 bg-white/20 rounded-full w-16 h-16 mx-auto mb-3 flex items-center justify-center">
+            <Building2 className="w-8 h-8" />
+          </div>
+          <h3 className="text-xl font-bold">SEMSA</h3>
+          <p className="text-white/80 text-sm mt-1">
+            {departments.length} departamentos • {employees.length} funcionários
+          </p>
+        </div>
+      </div>
+
+      {/* Linha conectora */}
+      <div className="flex justify-center mb-4">
+        <div className="w-0.5 h-8 bg-gradient-to-b from-purple-500 to-gray-300 dark:to-gray-600"></div>
+      </div>
+
+      {/* Departamentos */}
+      <div className="flex flex-wrap justify-center gap-6">
+        {departments.map((dept, index) => {
+          const colorScheme = deptColors[index % deptColors.length]
+          const isExpanded = expandedDepts.includes(dept.id)
+          const deptSectors = sectors.filter(s => s.department_id === dept.id)
+          const deptEmployees = getEmployeesByDept(dept.name)
+
+          return (
+            <div key={dept.id} className="flex flex-col items-center">
+              {/* Card do Departamento */}
+              <div 
+                onClick={() => toggleDept(dept.id)}
+                className={`cursor-pointer bg-gradient-to-r ${colorScheme.bg} rounded-xl p-5 shadow-lg text-white text-center min-w-[220px] hover:shadow-xl hover:scale-105 transition-all duration-300`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 bg-white/20 rounded-lg">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  {(deptSectors.length > 0 || deptEmployees.length > 0) && (
+                    isExpanded ? (
+                      <ChevronDown className="w-5 h-5" />
+                    ) : (
+                      <ChevronRight className="w-5 h-5" />
+                    )
+                  )}
+                </div>
+                <h4 className="font-bold text-lg">{dept.name}</h4>
+                <p className="text-white/80 text-xs mt-1">
+                  {deptSectors.length} setores • {deptEmployees.length} pessoas
+                </p>
+              </div>
+
+              {/* Setores e Funcionários expandidos */}
+              {isExpanded && (
+                <div className="mt-4 animate-fade-in">
+                  {/* Linha conectora */}
+                  <div className="flex justify-center mb-3">
+                    <div className="w-0.5 h-6 bg-gray-300 dark:bg-gray-600"></div>
+                  </div>
+
+                  {/* Setores */}
+                  {deptSectors.length > 0 && (
+                    <div className="space-y-3">
+                      {deptSectors.map(sector => {
+                        const isSectorExpanded = expandedSectors.includes(sector.id)
+                        return (
+                          <div key={sector.id} className="flex flex-col items-center">
+                            <div 
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleSector(sector.id)
+                              }}
+                              className={`cursor-pointer ${colorScheme.light} border-2 ${colorScheme.border} rounded-lg p-3 min-w-[180px] text-center hover:shadow-md transition-all`}
+                            >
+                              <div className="flex items-center justify-center gap-2">
+                                <Layers className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">{sector.name}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Funcionários do departamento (se não tem setores) */}
+                  {deptSectors.length === 0 && deptEmployees.length > 0 && (
+                    <div className="grid grid-cols-1 gap-2 mt-2">
+                      {deptEmployees.slice(0, 5).map(emp => (
+                        <div 
+                          key={emp.id}
+                          className="flex items-center gap-2 bg-white dark:bg-gray-700 rounded-lg p-2 shadow-sm"
+                        >
+                          {emp.photo_url ? (
+                            <img src={emp.photo_url} alt={emp.name} className="w-8 h-8 rounded-full object-cover" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center text-xs font-bold text-gray-600 dark:text-gray-300">
+                              {emp.name.charAt(0)}
+                            </div>
+                          )}
+                          <div className="text-left">
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate max-w-[120px]">{emp.name}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[120px]">{emp.position_name || 'Sem cargo'}</p>
+                          </div>
+                        </div>
+                      ))}
+                      {deptEmployees.length > 5 && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                          +{deptEmployees.length - 5} mais
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Cargos */}
+      <div className="mt-12 border-t border-gray-200 dark:border-gray-700 pt-8">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 text-center">
+          Cargos da Empresa
+        </h3>
+        <div className="flex flex-wrap justify-center gap-3">
+          {positions.map((pos, index) => (
+            <div 
+              key={pos.id}
+              className="flex items-center gap-2 bg-gradient-to-r from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-600 rounded-full px-4 py-2 shadow-sm hover:shadow-md transition-all"
+              style={{ animationDelay: `${index * 50}ms` }}
+            >
+              <Briefcase className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+              <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{pos.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Legenda */}
+      <div className="mt-8 flex flex-wrap justify-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-gradient-to-r from-indigo-500 to-purple-600"></div>
+          <span>Empresa</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-gradient-to-r from-blue-500 to-indigo-600"></div>
+          <span>Departamento</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded border-2 border-blue-300"></div>
+          <span>Setor</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded-full bg-gray-300"></div>
+          <span>Funcionário</span>
+        </div>
+      </div>
     </div>
   )
 }

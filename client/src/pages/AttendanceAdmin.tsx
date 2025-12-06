@@ -4,6 +4,7 @@ import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { Clock, Edit2, Save, X, UserCheck, Plus, CalendarOff } from 'lucide-react'
 import AbsenceModal from '../components/AbsenceModal'
+import { toast } from '../utils/toast'
 
 interface Employee {
   id: number
@@ -55,11 +56,36 @@ export default function AttendanceAdmin() {
     exit: 'Saída'
   }
 
-  const punchTypeColors: Record<string, string> = {
-    entry: 'green',
-    break_start: 'yellow',
-    break_end: 'blue',
-    exit: 'red'
+  // Classes estáticas para evitar problemas com Tailwind JIT
+  const punchTypeStyles: Record<string, { border: string; bg: string; text: string; icon: string }> = {
+    entry: {
+      border: 'border-green-200',
+      bg: 'bg-green-50 dark:bg-green-900/20',
+      text: 'text-green-900 dark:text-green-200',
+      icon: 'text-green-600 dark:text-green-400'
+    },
+    break_start: {
+      border: 'border-yellow-200',
+      bg: 'bg-yellow-50 dark:bg-yellow-900/20',
+      text: 'text-yellow-900 dark:text-yellow-200',
+      icon: 'text-yellow-600 dark:text-yellow-400'
+    },
+    break_end: {
+      border: 'border-blue-200',
+      bg: 'bg-blue-50 dark:bg-blue-900/20',
+      text: 'text-blue-900 dark:text-blue-200',
+      icon: 'text-blue-600 dark:text-blue-400'
+    },
+    exit: {
+      border: 'border-red-200',
+      bg: 'bg-red-50 dark:bg-red-900/20',
+      text: 'text-red-900 dark:text-red-200',
+      icon: 'text-red-600 dark:text-red-400'
+    }
+  }
+
+  const getPunchStyles = (punchType: string) => {
+    return punchTypeStyles[punchType] || punchTypeStyles.entry
   }
 
   useEffect(() => {
@@ -340,10 +366,12 @@ export default function AttendanceAdmin() {
 
           {punches.length > 0 && (
             <div className="space-y-4">
-              {punches.map((punch) => (
+              {punches.map((punch) => {
+                const styles = getPunchStyles(punch.punch_type)
+                return (
                 <div
                   key={punch.id}
-                  className={`border-2 border-${punchTypeColors[punch.punch_type]}-200 bg-${punchTypeColors[punch.punch_type]}-50 rounded-lg p-4`}
+                  className={`border-2 ${styles.border} ${styles.bg} rounded-lg p-4`}
                 >
                   {editing === punch.id ? (
                     // Modo Edição
@@ -394,8 +422,8 @@ export default function AttendanceAdmin() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="flex items-center gap-3 mb-2">
-                          <Clock className={`w-5 h-5 text-${punchTypeColors[punch.punch_type]}-600`} />
-                          <span className={`font-bold text-lg text-${punchTypeColors[punch.punch_type]}-900`}>
+                          <Clock className={`w-5 h-5 ${styles.icon}`} />
+                          <span className={`font-bold text-lg ${styles.text}`}>
                             {punchTypeLabels[punch.punch_type]}
                           </span>
                         </div>
@@ -439,7 +467,7 @@ export default function AttendanceAdmin() {
                     </div>
                   )}
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>

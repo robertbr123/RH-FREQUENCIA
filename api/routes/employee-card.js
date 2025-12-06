@@ -23,9 +23,66 @@ const checkRateLimit = (ip) => {
   return true;
 };
 
+// ===============================================
+// Endpoint para Scanner - Busca rápida por CPF ou Matrícula
+// Retorna apenas dados essenciais para registro de ponto
+// ===============================================
+router.get('/find', authenticateToken, async (req, res) => {
+  const { q } = req.query; // q = CPF ou matrícula
+
+  try {
+    if (!q || q.trim().length < 3) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Digite ao menos 3 caracteres' 
+      });
+    }
+
+    const input = q.replace(/\D/g, ''); // Apenas números
+    
+    // Buscar por ID (matrícula) ou CPF
+    const result = await pool.query(
+      `SELECT id, name, cpf, status, photo_url
+       FROM employees 
+       WHERE (
+         id::text = $1 
+         OR REPLACE(REPLACE(REPLACE(cpf, '.', ''), '-', ''), ' ', '') = $1
+       )
+       AND status = 'active'
+       LIMIT 1`,
+      [input]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Funcionário não encontrado ou inativo' 
+      });
+    }
+
+    const emp = result.rows[0];
+    
+    res.json({
+      success: true,
+      employee: {
+        id: emp.id,
+        name: emp.name,
+        cpf: emp.cpf
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erro ao buscar funcionário:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Erro ao buscar funcionário' 
+    });
+  }
+});
+
 // Endpoint PÚBLICO - Consulta de frequência por CPF
 router.post('/check-attendance', async (req, res) => {
-  const { cpf } = req.body;
+  const { cpf, month } = req.body;
   const clientIp = req.headers['x-forwarded-for'] || req.ip || 'unknown';
 
   try {
@@ -74,11 +131,21 @@ router.post('/check-attendance', async (req, res) => {
       });
     }
 
-    // Datas
-    const now = new Date();
-    const startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
-    const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // Datas - usar mês enviado pelo frontend se disponível
+    let targetDate;
+    if (month) {
+      // month vem como 'YYYY-MM'
+      const [year, monthNum] = month.split('-').map(Number);
+      targetDate = new Date(year, monthNum - 1, 1);
+    } else {
+      targetDate = new Date();
+    }
+    
+    const startDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1).toISOString().split('T')[0];
+    const endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).toISOString().split('T')[0];
+    const monthStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
+    
+    console.log('📅 Buscando frequência:', { cpf, month, startDate, endDate, monthStr });
 
     // Buscar punches
     const punchesRes = await pool.query(
@@ -130,22 +197,116 @@ router.post('/check-attendance', async (req, res) => {
       }
     }
 
-    // Calcular faltas (apenas dias de trabalho)
-    let absentDays = 0;
-    for (let d = 1; d <= now.getDate(); d++) {
-      const day = new Date(now.getFullYear(), now.getMonth(), d);
-      const dateStr = day.toISOString().split('T')[0];
-      const dayOfWeek = day.getDay();
-      const isWorkday = workdaySet.size === 0 || workdaySet.has(dayOfWeek);
+    // Buscar férias do funcionário no mês
+    const vacationsRes = await pool.query(
+      `SELECT start_date, end_date, days
+       FROM employee_vacations
+       WHERE employee_id = $1 
+         AND ((start_date <= $3::date AND end_date >= $2::date))`,
+      [emp.id, startDate, endDate]
+    );
+
+    // Criar set de dias em férias
+    const vacationDays = new Set();
+    vacationsRes.rows.forEach(vac => {
+      const vacStart = new Date(vac.start_date);
+      const vacEnd = new Date(vac.end_date);
+      const monthStart = new Date(startDate);
+      const monthEnd = new Date(endDate);
       
-      if (isWorkday && !dailyRecords[dateStr]) {
-        absentDays++;
+      // Iterar pelos dias de férias que estão dentro do mês
+      for (let d = new Date(Math.max(vacStart.getTime(), monthStart.getTime())); 
+           d <= Math.min(vacEnd.getTime(), monthEnd.getTime()); 
+           d.setDate(d.getDate() + 1)) {
+        vacationDays.add(d.toISOString().split('T')[0]);
+      }
+    });
+
+    // Buscar feriados do mês
+    const holidaysRes = await pool.query(
+      `SELECT TO_CHAR(date, 'YYYY-MM-DD') as date, name
+       FROM holidays
+       WHERE date >= $1::date AND date <= $2::date`,
+      [startDate, endDate]
+    );
+
+    const holidayDays = new Set(holidaysRes.rows.map(h => h.date));
+    const holidayNames = {};
+    holidaysRes.rows.forEach(h => holidayNames[h.date] = h.name);
+
+    // Calcular faltas (apenas dias de trabalho, excluindo férias e feriados)
+    let absentDays = 0;
+    let vacationCount = 0;
+    let holidayCount = 0;
+    const daysInMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate();
+    const today = new Date();
+    const isFutureMonth = targetDate > today;
+    const maxDay = (targetDate.getFullYear() === today.getFullYear() && targetDate.getMonth() === today.getMonth()) 
+      ? today.getDate() 
+      : daysInMonth;
+    
+    // Criar registros para dias de férias e feriados
+    const specialDays = {};
+    
+    // Se for mês futuro, não calcular faltas
+    if (!isFutureMonth) {
+      for (let d = 1; d <= maxDay; d++) {
+        const day = new Date(targetDate.getFullYear(), targetDate.getMonth(), d);
+        const dateStr = day.toISOString().split('T')[0];
+        const dayOfWeek = day.getDay();
+        const isWorkday = workdaySet.size === 0 || workdaySet.has(dayOfWeek);
+        
+        // Verificar se é férias
+        if (vacationDays.has(dateStr)) {
+          vacationCount++;
+          if (!dailyRecords[dateStr]) {
+            specialDays[dateStr] = { 
+              date: dateStr, 
+              check_in: null, 
+              check_out: null, 
+              hours: 0, 
+              status: 'vacation',
+              statusLabel: 'Férias'
+            };
+          }
+          continue; // Não conta como falta
+        }
+        
+        // Verificar se é feriado
+        if (holidayDays.has(dateStr)) {
+          holidayCount++;
+          if (!dailyRecords[dateStr]) {
+            specialDays[dateStr] = { 
+              date: dateStr, 
+              check_in: null, 
+              check_out: null, 
+              hours: 0, 
+              status: 'holiday',
+              statusLabel: holidayNames[dateStr] || 'Feriado'
+            };
+          }
+          continue; // Não conta como falta
+        }
+        
+        if (isWorkday && !dailyRecords[dateStr]) {
+          absentDays++;
+        }
       }
     }
 
     const presentDays = Object.keys(dailyRecords).length;
     const totalHours = Object.values(dailyRecords).reduce((sum, r) => sum + (r.hours || 0), 0);
-    const attendanceRecords = Object.values(dailyRecords).slice(0, 10);
+    
+    // Combinar registros de ponto com dias especiais (férias/feriados)
+    const allRecords = { ...dailyRecords };
+    Object.entries(specialDays).forEach(([date, data]) => {
+      if (!allRecords[date]) {
+        allRecords[date] = data;
+      }
+    });
+    
+    // Retornar todos os registros ordenados por data (mais recente primeiro)
+    const attendanceRecords = Object.values(allRecords).sort((a, b) => b.date.localeCompare(a.date));
 
     res.json({
       success: true,
@@ -161,12 +322,16 @@ router.post('/check-attendance', async (req, res) => {
         month: monthStr,
         present: presentDays,
         absent: absentDays,
+        vacation: vacationCount,
+        holidays: holidayCount,
         totalHours: parseFloat(totalHours.toFixed(2)),
         records: attendanceRecords.map(r => ({
           date: r.date,
           check_in: r.check_in || '00:00:00',
           check_out: r.check_out || null,
-          hours: r.hours || 0
+          hours: r.hours || 0,
+          status: r.status || 'present',
+          statusLabel: r.statusLabel || null
         })),
         workdays: Array.from(workdaySet)
       }

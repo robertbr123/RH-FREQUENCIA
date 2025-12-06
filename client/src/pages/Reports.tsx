@@ -1,10 +1,11 @@
-import { useState, useEffect, FormEvent } from 'react'
+import { useState, useEffect, FormEvent, useMemo } from 'react'
 import axios from 'axios'
 import { format, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import { FileText, Download, Calendar } from 'lucide-react'
+import { FileText, Download, Calendar, Users, Clock, CheckCircle, TrendingUp, AlertCircle } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { toast } from '../utils/toast'
 
 interface Employee {
   id: number
@@ -930,16 +931,39 @@ export default function Reports() {
 
       console.log('📊 Gerando relatório geral para:', { month, startDate, endDate })
 
-      // Buscar dados de todos os funcionários ativos
-      const response = await axios.get('/api/attendance', {
-        headers: { Authorization: `Bearer ${token}` },
-        params: {
-          start_date: startDate,
-          end_date: endDate,
-        },
+      // Buscar dados de todos os funcionários ativos e feriados
+      const [attendanceResponse, holidaysResponse] = await Promise.all([
+        axios.get('/api/attendance', {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            start_date: startDate,
+            end_date: endDate,
+          },
+        }),
+        axios.get('/api/organization/holidays', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      ])
+
+      const allAttendance = attendanceResponse.data
+      const allHolidays = holidaysResponse.data
+
+      // Calcular dias úteis do mês (excluindo feriados e finais de semana)
+      const daysInMonth = eachDayOfInterval({
+        start: startOfMonth(monthDate),
+        end: endOfMonth(monthDate),
       })
 
-      const allAttendance = response.data
+      const holidayDates = new Set(
+        allHolidays.map((h: Holiday) => h.date.split('T')[0])
+      )
+
+      const workingDays = daysInMonth.filter(day => {
+        const dayOfWeek = day.getDay()
+        const dateStr = format(day, 'yyyy-MM-dd')
+        // Não é fim de semana e não é feriado
+        return dayOfWeek !== 0 && dayOfWeek !== 6 && !holidayDates.has(dateStr)
+      }).length
 
       // Agrupar por funcionário
       const employeeMap = new Map()
@@ -977,57 +1001,219 @@ export default function Reports() {
         filteredEmployees = filteredEmployees.filter(([_, data]) => data.department_id === selectedDepartment)
       }
 
-      // Ordenar alfabeticamente
-      const sortedEmployees = filteredEmployees
-        .sort((a, b) => a[1].name.localeCompare(b[1].name))
+      // Calcular estatísticas gerais para o cabeçalho
+      let totalPresenceDays = 0
+      let totalAbsences = 0
+      let totalLateArrivals = 0
+      let totalWorkedHours = 0
+
+      filteredEmployees.forEach(([_, data]) => {
+        const records = data.records
+        const daysPresent = records.filter((r: any) => r.entry_time || r.check_in).length
+        totalPresenceDays += daysPresent
+        
+        const totalHours = records.reduce((acc: number, r: any) => {
+          const hours = parseFloat(r.total_hours) || 0
+          return acc + hours
+        }, 0)
+        totalWorkedHours += totalHours
+
+        // Calcular faltas (dias úteis - dias presentes)
+        const absences = Math.max(0, workingDays - daysPresent)
+        totalAbsences += absences
+
+        // Calcular atrasos
+        const lateCount = records.filter((r: any) => {
+          const entryTime = r.entry_time || r.check_in
+          if (!entryTime || typeof entryTime !== 'string' || !entryTime.includes(':')) return false
+          const [hourStr, minuteStr] = entryTime.split(':')
+          const hour = parseInt(hourStr, 10)
+          const minute = parseInt(minuteStr, 10)
+          return hour > 8 || (hour === 8 && minute > 30)
+        }).length
+        totalLateArrivals += lateCount
+      })
+
+      const totalEmployees = filteredEmployees.length
+      const avgPresenceRate = totalEmployees > 0 ? ((totalPresenceDays / (totalEmployees * workingDays)) * 100).toFixed(1) : '0.0'
+      const avgHoursPerEmployee = totalEmployees > 0 ? (totalWorkedHours / totalEmployees).toFixed(1) : '0.0'
+
+      // Ordenar por departamento e depois nome
+      const sortedEmployees = filteredEmployees.sort((a, b) => {
+        const deptA = a[1].department_name || 'Sem Departamento'
+        const deptB = b[1].department_name || 'Sem Departamento'
+        if (deptA !== deptB) {
+          return deptA.localeCompare(deptB)
+        }
+        return a[1].name.localeCompare(b[1].name)
+      })
 
       // Criar PDF em modo paisagem
       const doc = new jsPDF('landscape', 'mm', 'a4')
       
-      // Cores
-      const primaryColor: [number, number, number] = [59, 130, 246]
-      const borderColor: [number, number, number] = [229, 231, 235]
+      // Cores profissionais
+      const primaryColor: [number, number, number] = [37, 99, 235]
+      const darkGray: [number, number, number] = [55, 65, 81]
+      const borderColor: [number, number, number] = [209, 213, 219]
+      const grayBg: [number, number, number] = [249, 250, 251]
+      const greenColor: [number, number, number] = [34, 197, 94]
+      const redColor: [number, number, number] = [239, 68, 68]
+      const yellowColor: [number, number, number] = [234, 179, 8]
       
-      // Cabeçalho
+      // ===== CABEÇALHO PREMIUM =====
+      // Linha superior azul
       doc.setFillColor(...primaryColor)
-      doc.rect(0, 0, 297, 35, 'F')
+      doc.rect(0, 0, 297, 3, 'F')
       
-      doc.setTextColor(255, 255, 255)
-      doc.setFontSize(18)
+      // Background do cabeçalho com gradiente (simulado)
+      doc.setFillColor(239, 246, 255)
+      doc.rect(0, 3, 297, 37, 'F')
+      
+      // Borda inferior do cabeçalho
+      doc.setDrawColor(...primaryColor)
+      doc.setLineWidth(0.5)
+      doc.line(0, 40, 297, 40)
+      
+      // Título principal
+      doc.setTextColor(...darkGray)
+      doc.setFontSize(20)
       doc.setFont('helvetica', 'bold')
-      doc.text('RELATÓRIO GERAL DE FREQUÊNCIA', 148.5, 15, { align: 'center' })
+      doc.text('RELATÓRIO GERAL DE FREQUÊNCIA', 148.5, 13, { align: 'center' })
       
-      doc.setFontSize(11)
-      doc.setFont('helvetica', 'normal')
+      // Linha decorativa
+      doc.setDrawColor(...primaryColor)
+      doc.setLineWidth(0.8)
+      doc.line(90, 16, 207, 16)
+      
+      // Período
+      doc.setFontSize(12)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(...primaryColor)
       const monthName = format(monthDate, 'MMMM/yyyy', { locale: ptBR })
       doc.text(monthName.toUpperCase(), 148.5, 23, { align: 'center' })
       
-      // Linha de dados da empresa
-      let yPos = 45
-      doc.setTextColor(80, 80, 80)
-      doc.setFontSize(9)
+      // Informações do filtro
+      let yPos = 32
+      doc.setFontSize(8)
       doc.setFont('helvetica', 'normal')
-      doc.text(`Gerado em: ${format(new Date(), "dd/MM/yyyy 'às' HH:mm")}`, 14, yPos)
+      doc.setTextColor(100, 100, 100)
       
-      // Adicionar filtro de departamento se aplicado
+      let infoText = `Gerado em: ${format(new Date(), "dd/MM/yyyy 'às' HH:mm")} | Funcionários: ${totalEmployees}`
       if (selectedDepartment) {
         const deptName = departments.find(d => d.id === selectedDepartment)?.name || 'N/A'
-        doc.text(`Departamento: ${deptName}`, 14, yPos + 5)
-        yPos += 5
+        infoText += ` | Departamento: ${deptName}`
       }
+      infoText += ` | Dias Úteis: ${workingDays}`
       
-      doc.text(`Total de funcionários: ${sortedEmployees.length}`, 200, yPos)
-      
-      yPos += 10
+      doc.text(infoText, 148.5, yPos, { align: 'center' })
 
-      // Tabela de dados
+      // ===== CARDS DE ESTATÍSTICAS GERAIS =====
+      yPos = 48
+      
+      const cardWidth = 66
+      const cardHeight = 28
+      const cardGap = 5
+      const startX = 14
+      
+      // Card 1: Taxa de Presença
+      doc.setFillColor(239, 246, 255)
+      doc.setDrawColor(...primaryColor)
+      doc.setLineWidth(0.5)
+      doc.roundedRect(startX, yPos, cardWidth, cardHeight, 2, 2, 'FD')
+      
+      doc.setFontSize(8)
+      doc.setTextColor(100, 100, 100)
+      doc.setFont('helvetica', 'bold')
+      doc.text('TAXA DE PRESENÇA GERAL', startX + 33, yPos + 5, { align: 'center' })
+      
+      doc.setFontSize(22)
+      doc.setTextColor(...primaryColor)
+      doc.setFont('helvetica', 'bold')
+      doc.text(`${avgPresenceRate}%`, startX + 33, yPos + 16, { align: 'center' })
+      
+      doc.setFontSize(7)
+      doc.setTextColor(120, 120, 120)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`${totalPresenceDays} presenças de ${totalEmployees * workingDays} possíveis`, startX + 33, yPos + 22, { align: 'center' })
+      
+      // Card 2: Total de Horas
+      const card2X = startX + cardWidth + cardGap
+      doc.setFillColor(240, 253, 244)
+      doc.setDrawColor(...greenColor)
+      doc.roundedRect(card2X, yPos, cardWidth, cardHeight, 2, 2, 'FD')
+      
+      doc.setFontSize(8)
+      doc.setTextColor(100, 100, 100)
+      doc.setFont('helvetica', 'bold')
+      doc.text('TOTAL DE HORAS TRABALHADAS', card2X + 33, yPos + 5, { align: 'center' })
+      
+      doc.setFontSize(22)
+      doc.setTextColor(...greenColor)
+      doc.setFont('helvetica', 'bold')
+      const hoursDisplay = Math.floor(totalWorkedHours)
+      const minutesDisplay = Math.floor((totalWorkedHours % 1) * 60)
+      doc.text(`${hoursDisplay}h ${minutesDisplay}m`, card2X + 33, yPos + 16, { align: 'center' })
+      
+      doc.setFontSize(7)
+      doc.setTextColor(120, 120, 120)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`Média: ${avgHoursPerEmployee}h por funcionário`, card2X + 33, yPos + 22, { align: 'center' })
+      
+      // Card 3: Faltas
+      const card3X = card2X + cardWidth + cardGap
+      doc.setFillColor(254, 242, 242)
+      doc.setDrawColor(...redColor)
+      doc.roundedRect(card3X, yPos, cardWidth, cardHeight, 2, 2, 'FD')
+      
+      doc.setFontSize(8)
+      doc.setTextColor(100, 100, 100)
+      doc.setFont('helvetica', 'bold')
+      doc.text('TOTAL DE FALTAS', card3X + 33, yPos + 5, { align: 'center' })
+      
+      doc.setFontSize(22)
+      doc.setTextColor(...redColor)
+      doc.setFont('helvetica', 'bold')
+      doc.text(totalAbsences.toString(), card3X + 33, yPos + 16, { align: 'center' })
+      
+      doc.setFontSize(7)
+      doc.setTextColor(120, 120, 120)
+      doc.setFont('helvetica', 'normal')
+      const avgAbsences = totalEmployees > 0 ? (totalAbsences / totalEmployees).toFixed(1) : '0.0'
+      doc.text(`Média: ${avgAbsences} faltas por funcionário`, card3X + 33, yPos + 22, { align: 'center' })
+      
+      // Card 4: Atrasos
+      const card4X = card3X + cardWidth + cardGap
+      doc.setFillColor(254, 249, 231)
+      doc.setDrawColor(...yellowColor)
+      doc.roundedRect(card4X, yPos, cardWidth, cardHeight, 2, 2, 'FD')
+      
+      doc.setFontSize(8)
+      doc.setTextColor(100, 100, 100)
+      doc.setFont('helvetica', 'bold')
+      doc.text('TOTAL DE ATRASOS', card4X + 33, yPos + 5, { align: 'center' })
+      
+      doc.setFontSize(22)
+      doc.setTextColor(...yellowColor)
+      doc.setFont('helvetica', 'bold')
+      doc.text(totalLateArrivals.toString(), card4X + 33, yPos + 16, { align: 'center' })
+      
+      doc.setFontSize(7)
+      doc.setTextColor(120, 120, 120)
+      doc.setFont('helvetica', 'normal')
+      const avgLate = totalEmployees > 0 ? (totalLateArrivals / totalEmployees).toFixed(1) : '0.0'
+      doc.text(`Média: ${avgLate} atrasos por funcionário`, card4X + 33, yPos + 22, { align: 'center' })
+
+      yPos += cardHeight + 10
+
+      // ===== TABELA DETALHADA =====
       const tableData = sortedEmployees.map(([employeeId, data]) => {
         const records = data.records
         
         // Calcular estatísticas
         const daysPresent = records.filter((r: any) => r.entry_time || r.check_in).length
+        const absences = Math.max(0, workingDays - daysPresent)
+        const presenceRate = workingDays > 0 ? ((daysPresent / workingDays) * 100).toFixed(0) : '0'
         
-        // Garantir que totalHours seja sempre um número
         const totalHours = records.reduce((acc: number, r: any) => {
           const hours = parseFloat(r.total_hours) || 0
           return acc + hours
@@ -1046,47 +1232,138 @@ export default function Reports() {
           return hour > 8 || (hour === 8 && minute > 30)
         }).length
 
-        return [
-          data.name,
-          daysPresent.toString(),
-          totalHours.toFixed(1) + 'h',
-          avgHours + 'h',
-          lateCount.toString()
-        ]
+        // Calcular saídas antecipadas (saída antes das 18:00)
+        const earlyExits = records.filter((r: any) => {
+          const exitTime = r.exit_time || r.check_out
+          if (!exitTime || typeof exitTime !== 'string' || !exitTime.includes(':')) return false
+          
+          const [hourStr, minuteStr] = exitTime.split(':')
+          const hour = parseInt(hourStr, 10)
+          const minute = parseInt(minuteStr, 10)
+          return hour < 18 || (hour === 18 && minute < 0)
+        }).length
+
+        return {
+          data: [
+            data.department_name || 'Sem Depto',
+            data.name,
+            daysPresent.toString(),
+            absences.toString(),
+            `${presenceRate}%`,
+            totalHours.toFixed(1) + 'h',
+            avgHours + 'h/dia',
+            lateCount.toString(),
+            earlyExits.toString()
+          ],
+          presenceRate: parseFloat(presenceRate)
+        }
       })
 
       autoTable(doc, {
         startY: yPos,
-        head: [['Funcionário', 'Dias Presente', 'Total Horas', 'Média/Dia', 'Atrasos']],
-        body: tableData,
+        head: [['Depto', 'Funcionário', 'Presença', 'Faltas', '% Presença', 'Hrs Total', 'Média/Dia', 'Atrasos', 'Saídas Ant.']],
+        body: tableData.map(row => row.data),
         theme: 'grid',
         styles: { 
-          fontSize: 9,
-          cellPadding: 3,
+          fontSize: 7.5,
+          cellPadding: 2.5,
           lineColor: borderColor,
-          lineWidth: 0.3,
+          lineWidth: 0.2,
         },
         headStyles: { 
           fillColor: primaryColor,
           textColor: [255, 255, 255],
-          fontSize: 10,
+          fontSize: 8,
           fontStyle: 'bold',
           halign: 'center',
-          cellPadding: 4,
+          cellPadding: 3,
         },
         columnStyles: {
-          0: { cellWidth: 80, halign: 'left' },
-          1: { cellWidth: 30, halign: 'center' },
-          2: { cellWidth: 30, halign: 'center' },
-          3: { cellWidth: 30, halign: 'center' },
-          4: { cellWidth: 30, halign: 'center' },
+          0: { cellWidth: 28, halign: 'left', fontSize: 7 },
+          1: { cellWidth: 55, halign: 'left', fontStyle: 'bold' },
+          2: { cellWidth: 20, halign: 'center', fontStyle: 'bold' },
+          3: { cellWidth: 18, halign: 'center' },
+          4: { cellWidth: 22, halign: 'center', fontStyle: 'bold' },
+          5: { cellWidth: 22, halign: 'center' },
+          6: { cellWidth: 22, halign: 'center' },
+          7: { cellWidth: 18, halign: 'center' },
+          8: { cellWidth: 22, halign: 'center' },
         },
         alternateRowStyles: {
-          fillColor: [249, 250, 251]
-        }
+          fillColor: grayBg
+        },
+        didParseCell: (data: any) => {
+          const rowIndex = data.row.index
+          
+          // Colorir % Presença
+          if (data.section === 'body' && data.column.index === 4) {
+            const rate = tableData[rowIndex]?.presenceRate || 0
+            if (rate >= 95) {
+              data.cell.styles.textColor = greenColor
+            } else if (rate >= 80) {
+              data.cell.styles.textColor = yellowColor
+            } else {
+              data.cell.styles.textColor = redColor
+            }
+          }
+          
+          // Colorir Faltas
+          if (data.section === 'body' && data.column.index === 3) {
+            const absences = parseInt(data.cell.text[0])
+            if (absences > 3) {
+              data.cell.styles.textColor = redColor
+              data.cell.styles.fontStyle = 'bold'
+            } else if (absences > 0) {
+              data.cell.styles.textColor = yellowColor
+            } else {
+              data.cell.styles.textColor = greenColor
+            }
+          }
+          
+          // Colorir Atrasos
+          if (data.section === 'body' && data.column.index === 7) {
+            const lates = parseInt(data.cell.text[0])
+            if (lates > 5) {
+              data.cell.styles.textColor = redColor
+              data.cell.styles.fontStyle = 'bold'
+            } else if (lates > 2) {
+              data.cell.styles.textColor = yellowColor
+            }
+          }
+        },
+        margin: { left: 14, right: 14 },
       })
 
-      // Rodapé
+      // ===== LEGENDA DE CORES =====
+      const finalY = (doc as any).lastAutoTable.finalY || yPos
+      yPos = finalY + 8
+      
+      doc.setFontSize(8)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(...darkGray)
+      doc.text('LEGENDA:', 14, yPos)
+      
+      yPos += 5
+      doc.setFontSize(7)
+      doc.setFont('helvetica', 'normal')
+      
+      // Verde
+      doc.setFillColor(...greenColor)
+      doc.rect(14, yPos - 2, 3, 3, 'F')
+      doc.setTextColor(0, 0, 0)
+      doc.text('Excelente (≥95% presença, 0 faltas)', 19, yPos)
+      
+      // Amarelo
+      doc.setFillColor(...yellowColor)
+      doc.rect(90, yPos - 2, 3, 3, 'F')
+      doc.text('Atenção (80-94% presença, 1-3 faltas, 3-5 atrasos)', 95, yPos)
+      
+      // Vermelho
+      doc.setFillColor(...redColor)
+      doc.rect(190, yPos - 2, 3, 3, 'F')
+      doc.text('Crítico (<80% presença, >3 faltas, >5 atrasos)', 195, yPos)
+
+      // ===== RODAPÉ =====
       const pageCount = (doc as any).internal.getNumberOfPages()
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i)
@@ -1094,8 +1371,14 @@ export default function Reports() {
         doc.setTextColor(100, 100, 100)
         
         const pageHeight = doc.internal.pageSize.height
+        
+        // Linha superior do rodapé
+        doc.setDrawColor(...borderColor)
+        doc.setLineWidth(0.3)
+        doc.line(0, pageHeight - 15, 297, pageHeight - 15)
+        
         doc.text(
-          `Relatório Geral - ${format(new Date(), "dd/MM/yyyy 'às' HH:mm")}`,
+          `Relatório Geral de Frequência - ${format(new Date(), "dd/MM/yyyy 'às' HH:mm")}`,
           148.5,
           pageHeight - 10,
           { align: 'center' }
@@ -1106,10 +1389,17 @@ export default function Reports() {
           pageHeight - 10,
           { align: 'right' }
         )
+        
+        doc.setFontSize(6)
+        doc.text(
+          'Sistema RH - Relatório Confidencial',
+          14,
+          pageHeight - 10
+        )
       }
 
       // Salvar PDF
-      const fileName = `relatorio-geral-${month}.pdf`
+      const fileName = `relatorio-geral-${monthName.toLowerCase().replace(/\//g, '-')}.pdf`
       doc.save(fileName)
 
     } catch (error) {
@@ -1124,16 +1414,58 @@ export default function Reports() {
     <div className="animate-fade-in space-y-6">
       {/* Header com Gradiente */}
       <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent dark:from-blue-400 dark:to-indigo-400 mb-2">
-            Relatórios de Ponto
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            Gere relatórios mensais de entrada e saída dos funcionários
-          </p>
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg">
+            <FileText className="w-8 h-8 text-white" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              Relatórios de Ponto
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400">
+              Gere relatórios mensais de entrada e saída dos funcionários
+            </p>
+          </div>
         </div>
-        <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-4 rounded-2xl shadow-lg">
-          <FileText className="w-10 h-10 text-white" />
+      </div>
+
+      {/* Cards de Estatísticas Rápidas */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-4 text-white shadow-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-blue-100 text-sm">Funcionários</p>
+              <p className="text-2xl font-bold">{employees.length}</p>
+            </div>
+            <Users className="w-8 h-8 text-blue-200" />
+          </div>
+        </div>
+        <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl p-4 text-white shadow-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-green-100 text-sm">Departamentos</p>
+              <p className="text-2xl font-bold">{departments.length}</p>
+            </div>
+            <TrendingUp className="w-8 h-8 text-green-200" />
+          </div>
+        </div>
+        <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl p-4 text-white shadow-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-purple-100 text-sm">Mês Selecionado</p>
+              <p className="text-2xl font-bold">{month.split('-')[1]}/{month.split('-')[0]}</p>
+            </div>
+            <Calendar className="w-8 h-8 text-purple-200" />
+          </div>
+        </div>
+        <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-xl p-4 text-white shadow-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-amber-100 text-sm">Registros</p>
+              <p className="text-2xl font-bold">{attendanceData.length}</p>
+            </div>
+            <Clock className="w-8 h-8 text-amber-200" />
+          </div>
         </div>
       </div>
 
