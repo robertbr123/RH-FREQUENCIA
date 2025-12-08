@@ -65,7 +65,7 @@ services:
     environment:
       TZ: America/Rio_Branco
     ports:
-      - "80:80"
+      - "88:88"
     depends_on:
       - api
     networks:
