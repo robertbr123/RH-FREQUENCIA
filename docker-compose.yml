@@ -9,7 +9,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: postgresql://robert:Ipx102030@173.208.190.110:5432/rhf?sslmode=disable
+      DATABASE_URL: postgresql://rho:npg_9OVjKXtraZ1s@173.208.190.108:64500/rhf?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:-seu_jwt_secret_aqui_mudeme_em_producao}
       TZ: America/Rio_Branco
     ports:
