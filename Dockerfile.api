@@ -2,22 +2,26 @@
 FROM node:18-alpine
 
 # Instalar dependências do sistema
-RUN apk add --no-cache postgresql-client
+RUN apk add --no-cache postgresql-client wget
 
 # Definir diretório de trabalho
 WORKDIR /app
 
-# Copiar package.json da API
+# Copiar package.json da API primeiro (para cache de dependências)
 COPY api/package.json ./
 
 # Instalar dependências
-RUN npm install --production
+RUN npm install --omit=dev
 
 # Copiar código da API
 COPY api/ ./
 
 # Expor porta da API
 EXPOSE 3001
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:3001/api/health || exit 1
 
 # Comando para iniciar
 CMD ["node", "index.js"]

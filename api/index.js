@@ -347,10 +347,9 @@ app.use((req, res) => {
 // Export for Vercel
 export default app;
 
-// For local development
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 3001;
-  app.listen(PORT, () => {
-    console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  });
-}
+// Start server (for Docker and local development)
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`📍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+});

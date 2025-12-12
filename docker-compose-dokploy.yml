@@ -1,0 +1,50 @@
+services:
+  # Backend/API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rhf-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      TZ: America/Rio_Branco
+    ports:
+      - "3001:3001"
+    networks:
+      - rhf-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend com SSL
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: rhf-client
+    restart: unless-stopped
+    environment:
+      TZ: America/Rio_Branco
+    ports:
+      - "88:88"      # HTTP
+      - "443:443"    # HTTPS (para quando SSL for configurado)
+    #volumes:
+      #- ./nginx-ssl.conf:/etc/nginx/conf.d/default.conf:ro
+      # Descomente a linha abaixo quando configurar SSL com Let's Encrypt
+      # - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - api
+    networks:
+      - rhf-network
+
+networks:
+  rhf-network:
+    name: rhf-network
+    driver: bridge

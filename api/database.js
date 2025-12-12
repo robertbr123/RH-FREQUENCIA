@@ -7,19 +7,20 @@ dotenv.config();
 
 const { Pool } = pg;
 
-// Configuração ULTRA otimizada para Vercel Serverless com Neon
-// IMPORTANTE: Use a connection string do POOLER do Neon (porta 6543) ao invés da direta (5432)
+// Determinar se SSL deve ser usado baseado na DATABASE_URL
+const databaseUrl = process.env.DATABASE_URL || '';
+const useSSL = !databaseUrl.includes('sslmode=disable') && !databaseUrl.includes('localhost');
+
+// Configuração otimizada para Docker/Serverless
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  },
-  // Configurações MÍNIMAS para serverless - evitar "too many clients"
-  max: 1, // Apenas 1 conexão por instância serverless
+  ssl: useSSL ? { rejectUnauthorized: false } : false,
+  // Configurações para Docker - aumentar limites
+  max: 10, // Mais conexões para Docker
   min: 0, // Não manter conexões ociosas
-  idleTimeoutMillis: 1000, // 1 segundo - libera IMEDIATAMENTE
+  idleTimeoutMillis: 30000, // 30 segundos
   connectionTimeoutMillis: 10000, // 10 segundos para conectar
-  allowExitOnIdle: true // Permite encerrar conexões idle em serverless
+  allowExitOnIdle: true // Permite encerrar conexões idle
 });
 
 // Testar conexão
