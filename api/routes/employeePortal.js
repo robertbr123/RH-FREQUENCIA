@@ -439,6 +439,56 @@ router.get('/attendance/today', authenticatePortalToken, async (req, res) => {
   }
 });
 
+// Obter departamentos do funcionário (para seleção de ponto)
+router.get('/my-departments', authenticatePortalToken, async (req, res) => {
+  try {
+    // Buscar departamentos da nova tabela employee_departments
+    const result = await pool.query(
+      `SELECT ed.id, ed.department_id, ed.schedule_id, ed.is_primary,
+              d.name as department_name,
+              s.name as schedule_name,
+              s.start_time, s.end_time, s.break_start, s.break_end
+       FROM employee_departments ed
+       LEFT JOIN departments d ON ed.department_id = d.id
+       LEFT JOIN schedules s ON ed.schedule_id = s.id
+       WHERE ed.employee_id = $1
+       ORDER BY ed.is_primary DESC, d.name ASC`,
+      [req.employee.id]
+    );
+
+    // Se não encontrou na nova tabela, buscar o departamento principal da tabela employees
+    if (result.rows.length === 0) {
+      const fallbackResult = await pool.query(
+        `SELECT e.department_id, e.schedule_id,
+                d.name as department_name,
+                s.name as schedule_name,
+                s.start_time, s.end_time, s.break_start, s.break_end
+         FROM employees e
+         LEFT JOIN departments d ON e.department_id = d.id
+         LEFT JOIN schedules s ON e.schedule_id = s.id
+         WHERE e.id = $1`,
+        [req.employee.id]
+      );
+
+      if (fallbackResult.rows.length > 0 && fallbackResult.rows[0].department_id) {
+        return res.json([{
+          id: 0,
+          department_id: fallbackResult.rows[0].department_id,
+          is_primary: true,
+          ...fallbackResult.rows[0]
+        }]);
+      }
+
+      return res.json([]);
+    }
+
+    res.json(result.rows);
+  } catch (error) {
+    logger.error('Erro ao buscar departamentos do funcionário:', error);
+    res.status(500).json({ error: 'Erro ao buscar departamentos' });
+  }
+});
+
 // ==========================================
 // BANCO DE HORAS
 // ==========================================
@@ -771,12 +821,12 @@ router.put('/requests/:id/cancel', authenticatePortalToken, async (req, res) => 
 
 // Registrar ponto via reconhecimento facial (do portal)
 router.post('/punch/facial', authenticatePortalToken, async (req, res) => {
-  const { face_descriptor, latitude, longitude } = req.body;
+  const { face_descriptor, latitude, longitude, department_id } = req.body;
 
   try {
     // Buscar o descritor facial cadastrado do funcionário
     const employeeResult = await pool.query(
-      `SELECT id, name, face_descriptor, photo_url, department_id
+      `SELECT id, name, face_descriptor, photo_url, department_id, schedule_id
        FROM employees 
        WHERE id = $1 AND status = 'active'`,
       [req.employee.id]
@@ -787,6 +837,23 @@ router.post('/punch/facial', authenticatePortalToken, async (req, res) => {
     }
 
     const employee = employeeResult.rows[0];
+
+    // Se foi informado um department_id, buscar o schedule específico desse departamento
+    let scheduleId = employee.schedule_id;
+    let usedDepartmentId = employee.department_id;
+    
+    if (department_id) {
+      const deptSchedule = await pool.query(
+        `SELECT schedule_id, department_id FROM employee_departments 
+         WHERE employee_id = $1 AND department_id = $2`,
+        [req.employee.id, department_id]
+      );
+      
+      if (deptSchedule.rows.length > 0) {
+        scheduleId = deptSchedule.rows[0].schedule_id || scheduleId;
+        usedDepartmentId = department_id;
+      }
+    }
 
     if (!employee.face_descriptor) {
       return res.status(400).json({ 
@@ -895,11 +962,12 @@ router.post('/punch/facial', authenticatePortalToken, async (req, res) => {
     }
 
     // Registrar o ponto - gravar horário de Rio Branco diretamente
+    // Inclui schedule_id do departamento selecionado
     const punchResult = await pool.query(
-      `INSERT INTO attendance_punches (employee_id, date, punch_type, punch_time, latitude, longitude)
-       VALUES ($1, $2, $3, (NOW() AT TIME ZONE 'America/Rio_Branco'), $4, $5)
+      `INSERT INTO attendance_punches (employee_id, date, punch_type, punch_time, latitude, longitude, schedule_id)
+       VALUES ($1, $2, $3, (NOW() AT TIME ZONE 'America/Rio_Branco'), $4, $5, $6)
        RETURNING *, TO_CHAR(punch_time, 'HH24:MI') as formatted_time`,
-      [employee.id, today, punchType, latitude || null, longitude || null]
+      [employee.id, today, punchType, latitude || null, longitude || null, scheduleId || null]
     );
 
     // Buscar resumo do dia (horário já está em Rio Branco)

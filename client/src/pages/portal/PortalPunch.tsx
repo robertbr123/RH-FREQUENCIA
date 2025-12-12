@@ -5,7 +5,7 @@ import { useGeolocation, validateLocationAgainstAllowed, fetchAllowedLocations, 
 import axios from 'axios';
 import { 
   Camera, ArrowLeft, CheckCircle, XCircle, AlertTriangle,
-  Loader2, User, MapPin, MapPinOff, Shield, CloudOff
+  Loader2, User, MapPin, MapPinOff, Shield, CloudOff, Building2, Clock
 } from 'lucide-react';
 import { Snowfall } from '../../components/christmas';
 
@@ -18,6 +18,17 @@ interface AllowedLocation {
   latitude: number;
   longitude: number;
   radius: number;
+}
+
+interface EmployeeDepartment {
+  id: number;
+  department_id: number;
+  schedule_id: number | null;
+  is_primary: boolean;
+  department_name: string;
+  schedule_name: string | null;
+  start_time?: string;
+  end_time?: string;
 }
 
 interface PunchResult {
@@ -80,6 +91,11 @@ export default function PortalPunch() {
   // Estado para erro de face não reconhecida
   const [faceMismatch, setFaceMismatch] = useState(false);
   
+  // Estados para múltiplos departamentos
+  const [departments, setDepartments] = useState<EmployeeDepartment[]>([]);
+  const [selectedDepartment, setSelectedDepartment] = useState<number | null>(null);
+  const [loadingDepartments, setLoadingDepartments] = useState(true);
+  
   const { location, getLocation } = useGeolocation();
   
   const isProcessingRef = useRef(false);
@@ -103,6 +119,36 @@ export default function PortalPunch() {
     };
     
     checkFaceAndPunch();
+  }, []);
+
+  // Carregar departamentos do funcionário
+  useEffect(() => {
+    const loadDepartments = async () => {
+      setLoadingDepartments(true);
+      try {
+        const response = await axios.get('/api/portal/my-departments');
+        const depts = response.data;
+        setDepartments(depts);
+        
+        // Se tem mais de um departamento, não selecionar automaticamente
+        // Se tem apenas um, selecionar automaticamente
+        if (depts.length === 1) {
+          setSelectedDepartment(depts[0].department_id);
+        } else if (depts.length > 1) {
+          // Selecionar o departamento principal por padrão
+          const primary = depts.find((d: EmployeeDepartment) => d.is_primary);
+          if (primary) {
+            setSelectedDepartment(primary.department_id);
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao carregar departamentos:', err);
+      } finally {
+        setLoadingDepartments(false);
+      }
+    };
+    
+    loadDepartments();
   }, []);
 
   // Carregar configurações de geolocalização
@@ -194,7 +240,8 @@ export default function PortalPunch() {
       const response = await axios.post('/api/portal/punch/facial', {
         face_descriptor: Array.from(descriptor),
         latitude: location?.latitude,
-        longitude: location?.longitude
+        longitude: location?.longitude,
+        department_id: selectedDepartment // Enviar departamento selecionado
       });
       
       // Verificar se foi salvo offline (status 202)
@@ -268,7 +315,7 @@ export default function PortalPunch() {
       setVerifying(false);
       isProcessingRef.current = false;
     }
-  }, [location]);
+  }, [location, selectedDepartment]);
 
   const startScanning = () => {
     setScanning(true);
@@ -626,15 +673,71 @@ export default function PortalPunch() {
                 )
               ) : null}
               
+              {/* Seletor de Departamento - só exibe se tiver mais de um */}
+              {loadingDepartments ? (
+                <div className="flex items-center justify-center gap-2 text-white/50 text-sm mb-4">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Carregando departamentos...</span>
+                </div>
+              ) : departments.length > 1 ? (
+                <div className="mb-6">
+                  <label className="block text-white/70 text-sm mb-2 text-left">
+                    <Building2 className="w-4 h-4 inline mr-1" />
+                    Selecione o departamento para registrar:
+                  </label>
+                  <div className="space-y-2">
+                    {departments.map((dept) => (
+                      <button
+                        key={dept.id}
+                        onClick={() => setSelectedDepartment(dept.department_id)}
+                        className={`w-full p-3 rounded-xl border transition-all text-left ${
+                          selectedDepartment === dept.department_id
+                            ? 'bg-blue-500/30 border-blue-400 text-white'
+                            : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-medium">{dept.department_name}</span>
+                            {dept.is_primary && (
+                              <span className="ml-2 text-xs bg-blue-500/40 px-2 py-0.5 rounded-full">
+                                Principal
+                              </span>
+                            )}
+                          </div>
+                          {selectedDepartment === dept.department_id && (
+                            <CheckCircle className="w-5 h-5 text-blue-400" />
+                          )}
+                        </div>
+                        {dept.schedule_name && (
+                          <div className="flex items-center gap-1 text-xs text-white/50 mt-1">
+                            <Clock className="w-3 h-3" />
+                            <span>{dept.schedule_name}</span>
+                            {dept.start_time && dept.end_time && (
+                              <span>({dept.start_time} - {dept.end_time})</span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : departments.length === 1 ? (
+                <div className="flex items-center justify-center gap-2 text-white/50 text-sm mb-4">
+                  <Building2 className="w-4 h-4" />
+                  <span>{departments[0].department_name}</span>
+                </div>
+              ) : null}
+              
               <button
                 onClick={startScanning}
-                disabled={hasFace === null || loadingGeo}
+                disabled={hasFace === null || loadingGeo || loadingDepartments || (departments.length > 1 && !selectedDepartment)}
                 className="w-full py-4 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-semibold rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50"
               >
-                {hasFace === null || loadingGeo ? (
+                {hasFace === null || loadingGeo || loadingDepartments ? (
                   <>
                     <Loader2 className="w-6 h-6 animate-spin" />
-                    {loadingGeo ? 'Verificando localização...' : 'Carregando...'}
+                    {loadingGeo ? 'Verificando localização...' : loadingDepartments ? 'Carregando departamentos...' : 'Carregando...'}
                   </>
                 ) : (
                   <>

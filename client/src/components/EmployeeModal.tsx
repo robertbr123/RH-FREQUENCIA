@@ -2,6 +2,7 @@ import { useState, useEffect, FormEvent } from 'react'
 import axios from 'axios'
 import { X } from 'lucide-react'
 import { toast } from '../utils/toast'
+import EmployeeDepartments from './EmployeeDepartments'
 
 interface Employee {
   id?: number
@@ -71,7 +72,7 @@ export default function EmployeeModal({ employee, onClose, onSave }: Props) {
   const [departments, setDepartments] = useState<any[]>([])
   const [sectors, setSectors] = useState<any[]>([])
   const [schedules, setSchedules] = useState<any[]>([])
-  const [activeTab, setActiveTab] = useState<'personal' | 'contact' | 'work' | 'financial'>('personal')
+  const [activeTab, setActiveTab] = useState<'personal' | 'contact' | 'work' | 'departments' | 'financial'>('personal')
 
   // Funções de máscara
   const maskCPF = (value: string) => {
@@ -153,6 +154,7 @@ export default function EmployeeModal({ employee, onClose, onSave }: Props) {
     { id: 'personal', label: 'Dados Pessoais' },
     { id: 'contact', label: 'Contato' },
     { id: 'work', label: 'Trabalho' },
+    ...(employee?.id ? [{ id: 'departments', label: 'Departamentos' }] : []),
     { id: 'financial', label: 'Financeiro' },
   ]
 
@@ -532,6 +534,16 @@ export default function EmployeeModal({ employee, onClose, onSave }: Props) {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Departamentos (múltiplos) - Apenas para funcionários existentes */}
+            {activeTab === 'departments' && employee?.id && (
+              <EmployeeDepartments
+                employeeId={employee.id}
+                employeeName={formData.name || employee.name}
+                departments={departments}
+                schedules={schedules}
+              />
             )}
 
             {/* Financeiro */}

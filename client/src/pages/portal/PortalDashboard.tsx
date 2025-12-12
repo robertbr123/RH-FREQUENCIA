@@ -6,7 +6,7 @@ import axios from 'axios';
 import { 
   Clock, Calendar, TrendingUp, Bell, Camera, 
   ChevronRight, User, LogOut, Menu, X, Home,
-  FileText, Briefcase, CheckCircle, Inbox
+  FileText, Briefcase, CheckCircle, Inbox, QrCode
 } from 'lucide-react';
 import { Snowfall, ChristmasLights } from '../../components/christmas';
 import PortalOnboarding from '../../components/portal/PortalOnboarding';
@@ -99,6 +99,7 @@ export default function PortalDashboard() {
     { icon: Calendar, label: 'Meu Ponto', path: '/portal/frequencia' },
     { icon: TrendingUp, label: 'Banco de Horas', path: '/portal/banco-horas' },
     { icon: Briefcase, label: 'Férias', path: '/portal/ferias' },
+    { icon: QrCode, label: 'Meus Eventos', path: '/portal/eventos' },
     { icon: FileText, label: 'Solicitações', path: '/portal/solicitacoes' },
     { icon: Inbox, label: 'Caixa de Entrada', path: '/portal/inbox' },
     { icon: Bell, label: 'Lembretes', path: '/portal/notificacoes' },

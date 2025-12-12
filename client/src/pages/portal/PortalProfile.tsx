@@ -201,7 +201,11 @@ export default function PortalProfile() {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString('pt-BR');
+    // Extrair apenas a parte da data (YYYY-MM-DD) para evitar problemas de timezone
+    const datePart = dateStr.split('T')[0];
+    const [year, month, day] = datePart.split('-').map(Number);
+    // Criar data usando horário local (não UTC)
+    return `${day.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')}/${year}`;
   };
 
   const formatCpf = (cpf: string) => {

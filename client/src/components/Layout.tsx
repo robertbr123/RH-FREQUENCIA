@@ -2,6 +2,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { useTheme } from '../context/ThemeContext'
+import { usePermissions } from '../context/PermissionsContext'
 import { useChristmasSeason } from '../hooks'
 import { ChristmasLights } from './christmas'
 import { LayoutDashboard, Users, Clock, LogOut, Building2, UserCog, UserCircle, Settings, FileText, Camera, Menu, X, ClipboardEdit, ChevronRight, Moon, Sun, Database, Pin, PinOff, Wallet, MapPin, Bell } from 'lucide-react'
@@ -13,6 +14,7 @@ interface NavItem {
   href: string
   icon: React.ComponentType<{ className?: string }>
   roles: string[]
+  permissionKey?: string // Chave de permissão opcional para verificação granular
 }
 
 interface TooltipProps {
@@ -115,6 +117,7 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const { settings } = useSettings()
   const { theme, toggleTheme } = useTheme()
+  const { hasPermission } = usePermissions()
   const location = useLocation()
   const isChristmasSeason = useChristmasSeason()
   
@@ -191,25 +194,35 @@ export default function Layout() {
 
   // ============ NAVIGATION MEMOIZADA ============
   const navigation = useMemo<NavItem[]>(() => [
-    { name: 'Dashboard', href: '/admin', icon: LayoutDashboard, roles: ['admin', 'gestor'] },
-    { name: 'Funcionários', href: '/admin/employees', icon: Users, roles: ['admin', 'gestor'] },
-    { name: 'Frequência', href: '/admin/attendance', icon: Clock, roles: ['admin', 'gestor'] },
-    { name: 'Banco de Horas', href: '/admin/hour-bank', icon: Wallet, roles: ['admin', 'gestor'] },
-    { name: 'Scanner', href: '/admin/scanner', icon: Camera, roles: ['admin', 'gestor', 'operador'] },
-    { name: 'Relatórios', href: '/admin/reports', icon: FileText, roles: ['admin', 'gestor'] },
-    { name: 'Admin Pontos', href: '/admin/attendance-admin', icon: ClipboardEdit, roles: ['admin'] },
-    { name: 'Notificações', href: '/admin/notifications', icon: Bell, roles: ['admin', 'gestor'] },
-    { name: 'Organização', href: '/admin/organization', icon: Building2, roles: ['admin'] },
-    { name: 'Usuários', href: '/admin/users', icon: UserCog, roles: ['admin'] },
-    { name: 'Geolocalização', href: '/admin/geolocation', icon: MapPin, roles: ['admin'] },
-    { name: 'Backup', href: '/admin/backup', icon: Database, roles: ['admin'] },
-    { name: 'Configurações', href: '/admin/settings', icon: Settings, roles: ['admin'] },
+    { name: 'Dashboard', href: '/admin', icon: LayoutDashboard, roles: ['admin', 'gestor', 'operador'], permissionKey: 'dashboard.view' },
+    { name: 'Funcionários', href: '/admin/employees', icon: Users, roles: ['admin', 'gestor', 'operador'], permissionKey: 'employees.view' },
+    { name: 'Frequência', href: '/admin/attendance', icon: Clock, roles: ['admin', 'gestor', 'operador'], permissionKey: 'attendance.view' },
+    { name: 'Banco de Horas', href: '/admin/hour-bank', icon: Wallet, roles: ['admin', 'gestor', 'operador'], permissionKey: 'hourbank.view' },
+    { name: 'Scanner', href: '/admin/scanner', icon: Camera, roles: ['admin', 'gestor', 'operador'], permissionKey: 'scanner.view' },
+    { name: 'Relatórios', href: '/admin/reports', icon: FileText, roles: ['admin', 'gestor', 'operador'], permissionKey: 'reports.view' },
+    { name: 'Admin Pontos', href: '/admin/attendance-admin', icon: ClipboardEdit, roles: ['admin', 'gestor', 'operador'], permissionKey: 'attendance.admin' },
+    { name: 'Notificações', href: '/admin/notifications', icon: Bell, roles: ['admin', 'gestor', 'operador'], permissionKey: 'notifications.view' },
+    { name: 'Organização', href: '/admin/organization', icon: Building2, roles: ['admin', 'gestor', 'operador'], permissionKey: 'organization.view' },
+    { name: 'Usuários', href: '/admin/users', icon: UserCog, roles: ['admin', 'gestor', 'operador'], permissionKey: 'users.view' },
+    { name: 'Geolocalização', href: '/admin/geolocation', icon: MapPin, roles: ['admin', 'gestor', 'operador'], permissionKey: 'geolocation.view' },
+    { name: 'Backup', href: '/admin/backup', icon: Database, roles: ['admin', 'gestor', 'operador'], permissionKey: 'backup.view' },
+    { name: 'Configurações', href: '/admin/settings', icon: Settings, roles: ['admin', 'gestor', 'operador'], permissionKey: 'settings.view' },
   ], [])
 
-  // Filtrar navegação por role
+  // Filtrar navegação por role E permissões
   const filteredNavigation = useMemo(() => 
-    navigation.filter(item => item.roles.includes(user?.role || '')),
-    [navigation, user?.role]
+    navigation.filter(item => {
+      // Primeiro verifica se o role está na lista permitida
+      if (!item.roles.includes(user?.role || '')) return false
+      
+      // Se tem uma chave de permissão, verifica se o usuário tem permissão
+      if (item.permissionKey) {
+        return hasPermission(item.permissionKey)
+      }
+      
+      return true
+    }),
+    [navigation, user?.role, hasPermission]
   )
 
   // Largura do sidebar - transição suave entre estados

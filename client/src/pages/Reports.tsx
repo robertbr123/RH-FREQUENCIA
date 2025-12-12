@@ -12,6 +12,9 @@ interface Employee {
   name: string
   department_id?: number
   department_name?: string
+  all_department_ids?: number[]
+  all_department_names?: string[]
+  departments_count?: number
 }
 
 interface Department {
@@ -55,6 +58,8 @@ interface AttendanceRecord {
 export default function Reports() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [selectedEmployee, setSelectedEmployee] = useState<number | null>(null)
+  const [selectedEmployeeDepartment, setSelectedEmployeeDepartment] = useState<number | null>(null)
+  const [employeeDepartments, setEmployeeDepartments] = useState<{id: number, name: string}[]>([])
   const [month, setMonth] = useState(format(new Date(), 'yyyy-MM'))
   const [loading, setLoading] = useState(false)
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([])
@@ -70,6 +75,37 @@ export default function Reports() {
     loadDepartments()
   }, [])
 
+  // Recarregar funcionários quando departamento mudar (para multi-dept)
+  useEffect(() => {
+    if (selectedDepartment) {
+      loadEmployeesByDepartment(selectedDepartment)
+    } else {
+      loadEmployees()
+    }
+  }, [selectedDepartment])
+
+  // Carregar departamentos do funcionário selecionado
+  useEffect(() => {
+    if (selectedEmployee) {
+      const emp = employees.find(e => e.id === selectedEmployee)
+      if (emp && emp.all_department_ids && emp.all_department_ids.length > 1) {
+        // Funcionário tem múltiplos departamentos
+        const depts = emp.all_department_ids.map((id, index) => ({
+          id,
+          name: emp.all_department_names?.[index] || `Departamento ${id}`
+        })).filter(d => d.id != null)
+        setEmployeeDepartments(depts)
+        setSelectedEmployeeDepartment(emp.department_id || emp.all_department_ids[0])
+      } else {
+        setEmployeeDepartments([])
+        setSelectedEmployeeDepartment(null)
+      }
+    } else {
+      setEmployeeDepartments([])
+      setSelectedEmployeeDepartment(null)
+    }
+  }, [selectedEmployee, employees])
+
   const loadEmployees = async () => {
     try {
       const token = localStorage.getItem('token')
@@ -79,6 +115,22 @@ export default function Reports() {
       setEmployees(response.data.filter((e: any) => e.status === 'active'))
     } catch (error) {
       console.error('Erro ao carregar funcionários:', error)
+    }
+  }
+
+  // Carrega funcionários considerando multi-departamentos
+  const loadEmployeesByDepartment = async (deptId: number) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/attendance/employees-by-department', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { department_id: deptId }
+      })
+      setEmployees(response.data)
+    } catch (error) {
+      console.error('Erro ao carregar funcionários por departamento:', error)
+      // Fallback para método antigo
+      loadEmployees()
     }
   }
 
@@ -118,14 +170,22 @@ export default function Reports() {
       })
 
       // Buscar dados de frequência, feriados, férias e dados do funcionário em paralelo
+      // Usar nova rota individual-report se funcionário tem múltiplos departamentos
+      const attendanceParams: any = {
+        employee_id: selectedEmployee,
+        start_date: startDate,
+        end_date: endDate,
+      }
+      
+      // Se um departamento específico foi selecionado (funcionário multi-dept)
+      if (selectedEmployeeDepartment) {
+        attendanceParams.department_id = selectedEmployeeDepartment
+      }
+
       const [attendanceResponse, holidaysResponse, vacationsResponse, employeeResponse, absencesResponse] = await Promise.all([
-        axios.get('/api/attendance', {
+        axios.get('/api/attendance/individual-report', {
           headers: { Authorization: `Bearer ${token}` },
-          params: {
-            employee_id: selectedEmployee,
-            start_date: startDate,
-            end_date: endDate,
-          },
+          params: attendanceParams,
         }),
         axios.get('/api/organization/holidays', {
           headers: { Authorization: `Bearer ${token}` },
@@ -245,14 +305,22 @@ export default function Reports() {
         end: endOfMonth(monthDate),
       })
 
-      console.log('📊 Dados recebidos do backend:', attendanceResponse.data)
-      console.log('📊 Total de registros recebidos:', attendanceResponse.data.length)
-      console.log('� Dias do mês:', daysInMonth.length)
+      // Extrair registros da resposta (nova estrutura: { records, departments })
+      const attendanceRecords = attendanceResponse.data.records || attendanceResponse.data || []
+      
+      console.log('📊 Dados recebidos do backend:', attendanceRecords)
+      console.log('📊 Total de registros recebidos:', attendanceRecords.length)
+      console.log('📊 Dias do mês:', daysInMonth.length)
       console.log('📅 Período:', startDate, 'até', endDate)
+      
+      // Se temos departamentos do funcionário, mostrar no log
+      if (attendanceResponse.data.departments) {
+        console.log('🏢 Departamentos do funcionário:', attendanceResponse.data.departments)
+      }
 
       // Criar mapa de attendance por data (usando parseISO para evitar problemas de timezone)
       const attendanceMap = new Map()
-      attendanceResponse.data.forEach((record: any, index: number) => {
+      attendanceRecords.forEach((record: any, index: number) => {
         console.log(`\n📌 Registro ${index + 1}:`, record)
         // Agora usar o campo 'date' ao invés de extrair de check_in
         if (record.date) {
@@ -263,6 +331,7 @@ export default function Reports() {
           console.log(`   ⏰ Entry: ${record.entry_time || record.check_in || 'Não registrado'}`)
           console.log(`   ⏰ Exit: ${record.exit_time || record.check_out || 'Não registrado'}`)
           console.log(`   📊 Total Hours: ${record.total_hours || 'N/A'}`)
+          console.log(`   🏢 Departamento: ${record.punch_department_name || 'N/A'}`)
           attendanceMap.set(dateStr, record)
         } else {
           console.log(`   ❌ Registro sem campo 'date'!`, record)
@@ -497,7 +566,18 @@ export default function Reports() {
     doc.setFont('helvetica', 'bold')
     doc.text('Departamento:', 120, yPos)
     doc.setFont('helvetica', 'normal')
-    doc.text(employeeDetails.department_name || '-', 150, yPos)
+    // Mostrar departamento selecionado ou todos se não filtrado
+    let deptDisplay = '-'
+    if (selectedEmployeeDepartment) {
+      // Mostrar departamento específico selecionado
+      const selectedDept = employeeDepartments.find(d => d.id === selectedEmployeeDepartment)
+      deptDisplay = selectedDept?.name || employeeDetails.department_name || '-'
+    } else if (employeeDetails.all_department_names && employeeDetails.all_department_names.length > 0) {
+      deptDisplay = employeeDetails.all_department_names.filter(Boolean).join(', ')
+    } else {
+      deptDisplay = employeeDetails.department_name || '-'
+    }
+    doc.text(deptDisplay, 150, yPos)
     
     yPos += 7
     
@@ -932,12 +1012,14 @@ export default function Reports() {
       console.log('📊 Gerando relatório geral para:', { month, startDate, endDate })
 
       // Buscar dados de todos os funcionários ativos e feriados
+      // Usa nova rota que considera multi-departamentos
       const [attendanceResponse, holidaysResponse] = await Promise.all([
-        axios.get('/api/attendance', {
+        axios.get('/api/attendance/report', {
           headers: { Authorization: `Bearer ${token}` },
           params: {
             start_date: startDate,
             end_date: endDate,
+            department_id: selectedDepartment || undefined,
           },
         }),
         axios.get('/api/organization/holidays', {
@@ -985,6 +1067,8 @@ export default function Reports() {
             name: emp.name,
             department_id: emp.department_id,
             department_name: emp.department_name,
+            all_department_ids: emp.all_department_ids || [emp.department_id],
+            all_department_names: emp.all_department_names || [emp.department_name],
             records: []
           })
         } else {
@@ -992,13 +1076,19 @@ export default function Reports() {
           const existing = employeeMap.get(emp.id)
           existing.department_id = emp.department_id
           existing.department_name = emp.department_name
+          existing.all_department_ids = emp.all_department_ids || [emp.department_id]
+          existing.all_department_names = emp.all_department_names || [emp.department_name]
         }
       })
 
-      // Filtrar por departamento se selecionado
+      // Filtrar por departamento se selecionado (considera multi-departamentos)
       let filteredEmployees = Array.from(employeeMap.entries())
       if (selectedDepartment) {
-        filteredEmployees = filteredEmployees.filter(([_, data]) => data.department_id === selectedDepartment)
+        filteredEmployees = filteredEmployees.filter(([_, data]) => {
+          // Verifica se o departamento está na lista de departamentos do funcionário
+          const allDepts = data.all_department_ids || [data.department_id]
+          return allDepts.includes(selectedDepartment)
+        })
       }
 
       // Calcular estatísticas gerais para o cabeçalho
@@ -1243,9 +1333,14 @@ export default function Reports() {
           return hour < 18 || (hour === 18 && minute < 0)
         }).length
 
+        // Mostrar departamentos (múltiplos se existirem)
+        const deptNames = data.all_department_names && data.all_department_names.length > 0
+          ? data.all_department_names.filter(Boolean).join(', ')
+          : (data.department_name || 'Sem Depto')
+
         return {
           data: [
-            data.department_name || 'Sem Depto',
+            deptNames,
             data.name,
             daysPresent.toString(),
             absences.toString(),
@@ -1511,26 +1606,50 @@ export default function Reports() {
             </div>
           </div>
 
-          <div className={`grid gap-6 ${reportType === 'individual' ? 'grid-cols-2' : 'grid-cols-2'}`}>
+          <div className={`grid gap-6 ${reportType === 'individual' ? (employeeDepartments.length > 1 ? 'grid-cols-3' : 'grid-cols-2') : 'grid-cols-2'}`}>
             {reportType === 'individual' && (
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                  Funcionário
-                </label>
-                <select
-                  value={selectedEmployee || ''}
-                  onChange={(e) => setSelectedEmployee(Number(e.target.value))}
-                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white focus:border-transparent"
-                  required={reportType === 'individual'}
-                >
-                  <option value="">Selecione um funcionário</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                    Funcionário
+                  </label>
+                  <select
+                    value={selectedEmployee || ''}
+                    onChange={(e) => setSelectedEmployee(Number(e.target.value))}
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white focus:border-transparent"
+                    required={reportType === 'individual'}
+                  >
+                    <option value="">Selecione um funcionário</option>
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.name} {emp.departments_count && emp.departments_count > 1 ? `(${emp.departments_count} departamentos)` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Seletor de departamento quando funcionário tem múltiplos */}
+                {employeeDepartments.length > 1 && (
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                      Departamento
+                      <span className="ml-2 text-xs text-blue-500 font-normal">(funcionário com múltiplos)</span>
+                    </label>
+                    <select
+                      value={selectedEmployeeDepartment || ''}
+                      onChange={(e) => setSelectedEmployeeDepartment(Number(e.target.value))}
+                      className="w-full px-4 py-3 border border-blue-300 dark:border-blue-600 rounded-xl focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white focus:border-transparent bg-blue-50 dark:bg-blue-900/20"
+                    >
+                      <option value="">Todos os departamentos</option>
+                      {employeeDepartments.map((dept) => (
+                        <option key={dept.id} value={dept.id}>
+                          {dept.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </>
             )}
 
             {reportType === 'general' && (

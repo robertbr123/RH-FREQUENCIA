@@ -16,6 +16,7 @@ import locationsRoutes from './routes/locations.js';
 import permissionsRoutes from './routes/permissions.js';
 import employeePortalRoutes from './routes/employeePortal.js';
 import adminNotificationsRoutes from './routes/adminNotifications.js';
+import integrationRoutes from './routes/integration.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -83,6 +84,7 @@ app.use('/api/locations', locationsRoutes);
 app.use('/api/permissions', permissionsRoutes);
 app.use('/api/portal', employeePortalRoutes);
 app.use('/api/admin/notifications', adminNotificationsRoutes);
+app.use('/api/integration', integrationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

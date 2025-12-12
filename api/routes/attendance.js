@@ -28,22 +28,22 @@ const router = express.Router();
 // ==========================================
 
 router.post('/', authenticateToken, async (req, res) => {
-  const { employee_id, latitude, longitude, location_accuracy } = req.body;
+  const { employee_id, latitude, longitude, location_accuracy, department_id } = req.body;
 
   try {
     if (!employee_id) {
       return res.status(400).json({ error: 'employee_id é obrigatório' });
     }
 
-    logger.debug('Registro de ponto', { employee_id });
+    logger.debug('Registro de ponto', { employee_id, department_id });
     
     // Log de geolocalização se fornecida
     if (latitude && longitude) {
       logger.debug('Localização', { latitude, longitude, location_accuracy });
     }
 
-    // 1. Buscar funcionário com schedule
-    const employee = await getEmployeeWithSchedule(employee_id);
+    // 1. Buscar funcionário com schedule (pode ser específico por departamento)
+    const employee = await getEmployeeWithSchedule(employee_id, department_id);
     if (!employee) {
       return res.status(404).json({ error: 'Funcionário não encontrado' });
     }
@@ -93,18 +93,20 @@ router.post('/', authenticateToken, async (req, res) => {
     // 5. Validar horário
     const timeValidation = validatePunchTime(punchInfo.type, time, schedule, 30);
 
-    // 6. Registrar o ponto (com geolocalização se disponível)
+    // 6. Registrar o ponto (com geolocalização e department_id se disponível)
+    const useDeptId = department_id || employee.department_id;
+    
     const insertQuery = latitude && longitude
-      ? `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id, latitude, longitude, location_accuracy)
-         VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4, $5, $6, $7)
+      ? `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id, department_id, latitude, longitude, location_accuracy)
+         VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4, $5, $6, $7, $8)
          RETURNING *`
-      : `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id)
-         VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4)
+      : `INSERT INTO attendance_punches (employee_id, date, punch_time, punch_type, schedule_id, department_id)
+         VALUES ($1, $2, CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco', $3, $4, $5)
          RETURNING *`;
     
     const insertParams = latitude && longitude
-      ? [employee_id, date, punchInfo.type, employee.schedule_id, latitude, longitude, location_accuracy]
-      : [employee_id, date, punchInfo.type, employee.schedule_id];
+      ? [employee_id, date, punchInfo.type, employee.schedule_id, useDeptId, latitude, longitude, location_accuracy]
+      : [employee_id, date, punchInfo.type, employee.schedule_id, useDeptId];
 
     await pool.query(insertQuery, insertParams);
 
@@ -724,6 +726,319 @@ router.post('/face-register', authenticateToken, async (req, res) => {
     }
     
     res.status(500).json({ error: 'Erro ao registrar reconhecimento facial', details: error.message });
+  }
+});
+
+// ==========================================
+// RELATÓRIO COM MULTI-DEPARTAMENTOS
+// ==========================================
+
+// GET /api/attendance/report - Busca dados para relatório considerando multi-departamentos
+router.get('/report', authenticateToken, async (req, res) => {
+  const { start_date, end_date, department_id } = req.query;
+
+  try {
+    // Query que considera múltiplos departamentos via employee_departments
+    // Se department_id é especificado, filtra TAMBÉM os registros de ponto por esse departamento
+    let query = `
+      WITH daily_punches AS (
+        SELECT 
+          ap.employee_id,
+          ap.date,
+          ap.department_id as punch_department_id,
+          MIN(CASE WHEN ap.punch_type = 'entry' THEN ap.punch_time END) as entry_timestamp,
+          MIN(CASE WHEN ap.punch_type = 'break_start' THEN ap.punch_time END) as break_start_timestamp,
+          MIN(CASE WHEN ap.punch_type = 'break_end' THEN ap.punch_time END) as break_end_timestamp,
+          MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END) as exit_timestamp,
+          TO_CHAR(MIN(CASE WHEN ap.punch_type = 'entry' THEN ap.punch_time END), 'HH24:MI') as entry_time,
+          TO_CHAR(MIN(CASE WHEN ap.punch_type = 'break_start' THEN ap.punch_time END), 'HH24:MI') as break_start_time,
+          TO_CHAR(MIN(CASE WHEN ap.punch_type = 'break_end' THEN ap.punch_time END), 'HH24:MI') as break_end_time,
+          TO_CHAR(MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END), 'HH24:MI') as exit_time
+        FROM attendance_punches ap
+        WHERE 1=1
+    `;
+
+    const params = [];
+    let paramCount = 1;
+
+    if (start_date) {
+      query += ` AND ap.date >= $${paramCount++}`;
+      params.push(start_date);
+    }
+    if (end_date) {
+      query += ` AND ap.date <= $${paramCount++}`;
+      params.push(end_date);
+    }
+    
+    // Filtrar registros de ponto pelo departamento selecionado
+    if (department_id) {
+      query += ` AND (ap.department_id = $${paramCount++} OR ap.department_id IS NULL)`;
+      params.push(parseInt(department_id));
+    }
+
+    query += `
+        GROUP BY ap.employee_id, ap.date, ap.department_id
+      ),
+      employee_depts AS (
+        SELECT 
+          e.id as employee_id,
+          e.name as employee_name,
+          e.department_id as primary_department_id,
+          pd.name as primary_department_name,
+          COALESCE(
+            (SELECT array_agg(DISTINCT ed.department_id) 
+             FROM employee_departments ed 
+             WHERE ed.employee_id = e.id),
+            ARRAY[e.department_id]
+          ) as all_department_ids,
+          COALESCE(
+            (SELECT array_agg(DISTINCT d.name) 
+             FROM employee_departments ed 
+             JOIN departments d ON ed.department_id = d.id
+             WHERE ed.employee_id = e.id),
+            ARRAY[pd.name]
+          ) as all_department_names
+        FROM employees e
+        LEFT JOIN departments pd ON e.department_id = pd.id
+        WHERE e.status = 'active'
+      )
+      SELECT 
+        dp.*,
+        ed.employee_name,
+        COALESCE(dp.punch_department_id, ed.primary_department_id) as department_id,
+        COALESCE(
+          (SELECT name FROM departments WHERE id = dp.punch_department_id),
+          ed.primary_department_name
+        ) as department_name,
+        ed.all_department_ids,
+        ed.all_department_names,
+        CASE 
+          WHEN dp.break_start_timestamp IS NOT NULL AND dp.break_end_timestamp IS NOT NULL AND dp.exit_timestamp IS NOT NULL THEN
+            EXTRACT(EPOCH FROM ((dp.break_start_timestamp - dp.entry_timestamp) + (dp.exit_timestamp - dp.break_end_timestamp))) / 3600
+          WHEN dp.exit_timestamp IS NOT NULL THEN
+            EXTRACT(EPOCH FROM (dp.exit_timestamp - dp.entry_timestamp)) / 3600
+          ELSE NULL
+        END as total_hours,
+        dp.entry_timestamp as check_in, 
+        dp.exit_timestamp as check_out
+      FROM daily_punches dp
+      JOIN employee_depts ed ON dp.employee_id = ed.employee_id
+    `;
+
+    // Filtrar funcionários que pertencem ao departamento
+    if (department_id) {
+      query += ` WHERE $${paramCount++} = ANY(ed.all_department_ids)`;
+      params.push(parseInt(department_id));
+    }
+
+    // Filtro de gestor - considera múltiplos departamentos
+    if (req.user.role === 'gestor') {
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      if (department_id) {
+        query += ` AND ed.all_department_ids && $${paramCount++}`;
+      } else {
+        query += ` WHERE ed.all_department_ids && $${paramCount++}`;
+      }
+      params.push(deptIds);
+    }
+
+    query += ` ORDER BY dp.date DESC, ed.employee_name`;
+
+    const result = await queryWithRetry(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    logger.error('Erro ao buscar relatório', error);
+    res.status(500).json({ error: 'Erro ao buscar relatório', details: error.message });
+  }
+});
+
+// GET /api/attendance/employees-by-department - Lista funcionários por departamento (multi-dept)
+router.get('/employees-by-department', authenticateToken, async (req, res) => {
+  const { department_id } = req.query;
+
+  try {
+    let query = `
+      SELECT DISTINCT
+        e.id,
+        e.name,
+        e.department_id as primary_department_id,
+        pd.name as primary_department_name,
+        COALESCE(
+          (SELECT array_agg(DISTINCT ed.department_id) 
+           FROM employee_departments ed 
+           WHERE ed.employee_id = e.id),
+          ARRAY[e.department_id]
+        ) as all_department_ids,
+        COALESCE(
+          (SELECT array_agg(DISTINCT d.name) 
+           FROM employee_departments ed 
+           JOIN departments d ON ed.department_id = d.id
+           WHERE ed.employee_id = e.id),
+          ARRAY[pd.name]
+        ) as all_department_names
+      FROM employees e
+      LEFT JOIN departments pd ON e.department_id = pd.id
+      WHERE e.status = 'active'
+    `;
+
+    const params = [];
+    let paramCount = 1;
+
+    if (department_id) {
+      query += `
+        AND (
+          e.department_id = $${paramCount}
+          OR EXISTS (
+            SELECT 1 FROM employee_departments ed 
+            WHERE ed.employee_id = e.id AND ed.department_id = $${paramCount}
+          )
+        )
+      `;
+      params.push(parseInt(department_id));
+      paramCount++;
+    }
+
+    // Filtro de gestor
+    if (req.user.role === 'gestor') {
+      const deptIds = req.userDepartmentIds || [req.userDepartmentId];
+      query += `
+        AND (
+          e.department_id = ANY($${paramCount})
+          OR EXISTS (
+            SELECT 1 FROM employee_departments ed 
+            WHERE ed.employee_id = e.id AND ed.department_id = ANY($${paramCount})
+          )
+        )
+      `;
+      params.push(deptIds);
+    }
+
+    query += ` ORDER BY e.name`;
+
+    const result = await queryWithRetry(query, params);
+    res.json(result.rows);
+  } catch (error) {
+    logger.error('Erro ao buscar funcionários por departamento', error);
+    res.status(500).json({ error: 'Erro ao buscar funcionários', details: error.message });
+  }
+});
+
+// GET /api/attendance/individual-report - Busca dados para relatório individual por departamento
+// Retorna dados separados por departamento se o funcionário tem múltiplos
+router.get('/individual-report', authenticateToken, async (req, res) => {
+  const { employee_id, start_date, end_date, department_id } = req.query;
+
+  try {
+    if (!employee_id) {
+      return res.status(400).json({ error: 'employee_id é obrigatório' });
+    }
+
+    // Verificar se a coluna department_id existe na tabela attendance_punches
+    let hasDepartmentColumn = false;
+    try {
+      const checkColumn = await pool.query(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'attendance_punches' AND column_name = 'department_id'
+      `);
+      hasDepartmentColumn = checkColumn.rows.length > 0;
+    } catch (e) {
+      logger.warn('Não foi possível verificar coluna department_id:', e.message);
+    }
+
+    // Query que busca os registros de ponto filtrados por departamento se especificado
+    let query = `
+      SELECT 
+        ap.employee_id,
+        ap.date,
+        ${hasDepartmentColumn ? 'ap.department_id as punch_department_id,' : ''}
+        TO_CHAR(MIN(CASE WHEN ap.punch_type = 'entry' THEN ap.punch_time END), 'HH24:MI') as entry_time,
+        TO_CHAR(MIN(CASE WHEN ap.punch_type = 'break_start' THEN ap.punch_time END), 'HH24:MI') as break_start_time,
+        TO_CHAR(MIN(CASE WHEN ap.punch_type = 'break_end' THEN ap.punch_time END), 'HH24:MI') as break_end_time,
+        TO_CHAR(MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END), 'HH24:MI') as exit_time,
+        MIN(CASE WHEN ap.punch_type = 'entry' THEN ap.punch_time END) as check_in,
+        MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END) as check_out,
+        CASE 
+          WHEN MIN(CASE WHEN ap.punch_type = 'break_start' THEN ap.punch_time END) IS NOT NULL 
+            AND MIN(CASE WHEN ap.punch_type = 'break_end' THEN ap.punch_time END) IS NOT NULL 
+            AND MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END) IS NOT NULL 
+          THEN
+            EXTRACT(EPOCH FROM (
+              (MIN(CASE WHEN ap.punch_type = 'break_start' THEN ap.punch_time END) - MIN(CASE WHEN ap.punch_type = 'entry' THEN ap.punch_time END)) +
+              (MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END) - MIN(CASE WHEN ap.punch_type = 'break_end' THEN ap.punch_time END))
+            )) / 3600
+          WHEN MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END) IS NOT NULL 
+          THEN
+            EXTRACT(EPOCH FROM (MAX(CASE WHEN ap.punch_type = 'exit' THEN ap.punch_time END) - MIN(CASE WHEN ap.punch_type = 'entry' THEN ap.punch_time END))) / 3600
+          ELSE NULL
+        END as total_hours
+      FROM attendance_punches ap
+      WHERE ap.employee_id = $1
+    `;
+
+    const params = [parseInt(employee_id)];
+    let paramCount = 2;
+
+    if (start_date) {
+      query += ` AND ap.date >= $${paramCount++}`;
+      params.push(start_date);
+    }
+    if (end_date) {
+      query += ` AND ap.date <= $${paramCount++}`;
+      params.push(end_date);
+    }
+    
+    // Filtrar por departamento se a coluna existir E um departamento foi selecionado
+    if (hasDepartmentColumn && department_id) {
+      query += ` AND ap.department_id = $${paramCount++}`;
+      params.push(parseInt(department_id));
+    }
+
+    // GROUP BY inclui department_id se existir
+    if (hasDepartmentColumn) {
+      query += ` GROUP BY ap.employee_id, ap.date, ap.department_id ORDER BY ap.date`;
+    } else {
+      query += ` GROUP BY ap.employee_id, ap.date ORDER BY ap.date`;
+    }
+
+    const result = await queryWithRetry(query, params);
+    
+    // Se um departamento foi selecionado mas a coluna não existe, retornar vazio
+    // (porque não temos como saber em qual departamento o ponto foi batido)
+    let records = result.rows;
+    if (department_id && !hasDepartmentColumn) {
+      // Não podemos filtrar, então informamos que precisa da migração
+      logger.warn('Filtro por departamento solicitado mas coluna department_id não existe em attendance_punches');
+      // Retorna os registros mesmo assim, mas o frontend deve saber que não está filtrado
+    }
+    
+    // Buscar departamentos do funcionário (se a tabela existir)
+    let deptResult = { rows: [] };
+    try {
+      const deptQuery = `
+        SELECT 
+          ed.department_id,
+          d.name as department_name,
+          s.name as schedule_name,
+          ed.is_primary
+        FROM employee_departments ed
+        JOIN departments d ON ed.department_id = d.id
+        LEFT JOIN schedules s ON ed.schedule_id = s.id
+        WHERE ed.employee_id = $1
+        ORDER BY ed.is_primary DESC, d.name
+      `;
+      deptResult = await queryWithRetry(deptQuery, [parseInt(employee_id)]);
+    } catch (deptError) {
+      logger.warn('Tabela employee_departments pode não existir:', deptError.message);
+    }
+
+    res.json({
+      records: records,
+      departments: deptResult.rows,
+      filterByDepartmentSupported: hasDepartmentColumn
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar relatório individual', error);
+    res.status(500).json({ error: 'Erro ao buscar relatório individual', details: error.message });
   }
 });
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import axios from 'axios'
-import { Plus, Search, Edit, Trash2, UserCircle, FileText, Upload, Download, Users, UserCheck, UserX, Briefcase, List, LayoutGrid, Camera, Key } from 'lucide-react'
+import { Plus, Search, Edit, Trash2, UserCircle, FileText, Upload, Download, Users, UserCheck, UserX, Briefcase, List, LayoutGrid, Camera, Key, Building2 } from 'lucide-react'
 import EmployeeModal from '../components/EmployeeModal'
 import EmployeeCard from '../components/EmployeeCard'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -8,6 +8,7 @@ import FaceRegistrationModal from '../components/FaceRegistrationModal'
 import EmptyState from '../components/EmptyState'
 import Avatar from '../components/Avatar'
 import { toast } from '../utils/toast'
+import { usePermissions } from '../context/PermissionsContext'
 
 interface Employee {
   id: number
@@ -24,9 +25,19 @@ interface Employee {
   sector_name?: string
   photo_url?: string
   sector?: string
+  departments_count?: number  // Número de departamentos vinculados
 }
 
 export default function Employees() {
+  // Permissões do usuário
+  const { hasPermission } = usePermissions()
+  const canCreate = hasPermission('employees.create')
+  const canEdit = hasPermission('employees.edit')
+  const canDelete = hasPermission('employees.delete')
+  const canImport = hasPermission('employees.import')
+  const canExport = hasPermission('employees.export')
+  const canRegisterFace = hasPermission('employees.face_register')
+  
   const [employees, setEmployees] = useState<Employee[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState('')
@@ -548,37 +559,43 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
             <Download className="w-5 h-5 mr-2" />
             Baixar Exemplo
           </button>
-          <button
-            onClick={exportFilteredCSV}
-            className="flex items-center px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-lg hover:shadow-lg hover:scale-105 transition-all duration-300"
-          >
-            <Download className="w-5 h-5 mr-2" />
-            Exportar CSV
-          </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importing}
-            className="flex items-center px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:shadow-lg hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100"
-          >
-            {importing ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                Importando...
-              </>
-            ) : (
-              <>
-                <Upload className="w-5 h-5 mr-2" />
-                Importar CSV
-              </>
-            )}
-          </button>
-          <button
-            onClick={handleAdd}
-            className="flex items-center px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-lg hover:shadow-xl hover:scale-105 transition-all duration-300 font-semibold"
-          >
-            <Plus className="w-5 h-5 mr-2" />
-            Novo Funcionário
-          </button>
+          {canExport && (
+            <button
+              onClick={exportFilteredCSV}
+              className="flex items-center px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-lg hover:shadow-lg hover:scale-105 transition-all duration-300"
+            >
+              <Download className="w-5 h-5 mr-2" />
+              Exportar CSV
+            </button>
+          )}
+          {canImport && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+              className="flex items-center px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:shadow-lg hover:scale-105 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100"
+            >
+              {importing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Importando...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-5 h-5 mr-2" />
+                  Importar CSV
+                </>
+              )}
+            </button>
+          )}
+          {canCreate && (
+            <button
+              onClick={handleAdd}
+              className="flex items-center px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-lg hover:shadow-xl hover:scale-105 transition-all duration-300 font-semibold"
+            >
+              <Plus className="w-5 h-5 mr-2" />
+              Novo Funcionário
+            </button>
+          )}
         </div>
       </div>
 
@@ -838,6 +855,14 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                 <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
                   <span className="font-medium text-gray-700 dark:text-gray-300 min-w-[100px]">🏢 Depto:</span>
                   <span className="truncate">{employee.department_name || employee.department || '-'}</span>
+                  {(employee.departments_count || 0) > 1 && (
+                    <span 
+                      className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded-full"
+                      title={`${employee.departments_count} departamentos`}
+                    >
+                      +{(employee.departments_count || 0) - 1}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
                   <span className="font-medium text-gray-700 dark:text-gray-300 min-w-[100px]">📱 Telefone:</span>
@@ -854,14 +879,16 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                   <FileText className="w-4 h-4 mr-1" />
                   Ficha
                 </button>
-                <button
-                  onClick={() => { setFaceEmployee(employee); setFaceModalOpen(true); }}
-                  className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 text-green-700 dark:text-green-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
-                  title="Cadastrar Face"
-                >
-                  <Camera className="w-4 h-4 mr-1" />
-                  Face
-                </button>
+                {canRegisterFace && (
+                  <button
+                    onClick={() => { setFaceEmployee(employee); setFaceModalOpen(true); }}
+                    className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 text-green-700 dark:text-green-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
+                    title="Cadastrar Face"
+                  >
+                    <Camera className="w-4 h-4 mr-1" />
+                    Face
+                  </button>
+                )}
                 <button
                   onClick={() => handleResetPassword(employee)}
                   className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 text-amber-700 dark:text-amber-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
@@ -870,24 +897,28 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                   <Key className="w-4 h-4 mr-1" />
                   Senha
                 </button>
-                <button
-                  onClick={() => handleEdit(employee)}
-                  className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 text-purple-700 dark:text-purple-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
-                >
-                  <Edit className="w-4 h-4 mr-1" />
-                  Editar
-                </button>
-                <button
-                  onClick={() => handleDelete(employee.id)}
-                  className={`flex-1 flex items-center justify-center px-3 py-2 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium ${
-                    employee.status === 'active'
-                      ? 'bg-gradient-to-r from-red-50 to-rose-50 dark:from-red-900/20 dark:to-rose-900/20 text-red-700 dark:text-red-400'
-                      : 'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 text-green-700 dark:text-green-400'
-                  }`}
-                >
-                  <Trash2 className="w-4 h-4 mr-1" />
-                  {employee.status === 'active' ? 'Desativar' : 'Ativar'}
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={() => handleEdit(employee)}
+                    className="flex-1 flex items-center justify-center px-3 py-2 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 text-purple-700 dark:text-purple-400 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium"
+                  >
+                    <Edit className="w-4 h-4 mr-1" />
+                    Editar
+                  </button>
+                )}
+                {canDelete && (
+                  <button
+                    onClick={() => handleDelete(employee.id)}
+                    className={`flex-1 flex items-center justify-center px-3 py-2 rounded-lg hover:shadow-md hover:scale-105 transition-all duration-200 font-medium ${
+                      employee.status === 'active'
+                        ? 'bg-gradient-to-r from-red-50 to-rose-50 dark:from-red-900/20 dark:to-rose-900/20 text-red-700 dark:text-red-400'
+                        : 'bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 text-green-700 dark:text-green-400'
+                    }`}
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    {employee.status === 'active' ? 'Desativar' : 'Ativar'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -955,8 +986,19 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900 dark:text-white">
-                        {employee.department_name || employee.department || '-'}
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm text-gray-900 dark:text-white">
+                          {employee.department_name || employee.department || '-'}
+                        </div>
+                        {(employee.departments_count || 0) > 1 && (
+                          <span 
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded-full"
+                            title={`${employee.departments_count} departamentos`}
+                          >
+                            <Building2 className="w-3 h-3" />
+                            +{(employee.departments_count || 0) - 1}
+                          </span>
+                        )}
                       </div>
                       {employee.sector_name && (
                         <div className="text-xs text-gray-500 dark:text-gray-400">
@@ -992,13 +1034,15 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                         >
                           <FileText className="w-5 h-5" />
                         </button>
-                        <button
-                          onClick={() => { setFaceEmployee(employee); setFaceModalOpen(true); }}
-                          className="p-2 text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200"
-                          title="Cadastrar Face"
-                        >
-                          <Camera className="w-5 h-5" />
-                        </button>
+                        {canRegisterFace && (
+                          <button
+                            onClick={() => { setFaceEmployee(employee); setFaceModalOpen(true); }}
+                            className="p-2 text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200"
+                            title="Cadastrar Face"
+                          >
+                            <Camera className="w-5 h-5" />
+                          </button>
+                        )}
                         <button
                           onClick={() => handleResetPassword(employee)}
                           className="p-2 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-all duration-200"
@@ -1006,24 +1050,28 @@ Ana Costa,ana.costa@email.com,789.123.456-00,78.912.345-6,1988-02-28,F,solteiro,
                         >
                           <Key className="w-5 h-5" />
                         </button>
-                        <button
-                          onClick={() => handleEdit(employee)}
-                          className="p-2 text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200"
-                          title="Editar"
-                        >
-                          <Edit className="w-5 h-5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(employee.id)}
-                          className={`p-2 rounded-lg transition-all duration-200 ${
-                            employee.status === 'active'
-                              ? 'text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'
-                              : 'text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20'
-                          }`}
-                          title={employee.status === 'active' ? 'Desativar' : 'Ativar'}
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
+                        {canEdit && (
+                          <button
+                            onClick={() => handleEdit(employee)}
+                            className="p-2 text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200"
+                            title="Editar"
+                          >
+                            <Edit className="w-5 h-5" />
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button
+                            onClick={() => handleDelete(employee.id)}
+                            className={`p-2 rounded-lg transition-all duration-200 ${
+                              employee.status === 'active'
+                                ? 'text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'
+                                : 'text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20'
+                            }`}
+                            title={employee.status === 'active' ? 'Desativar' : 'Ativar'}
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

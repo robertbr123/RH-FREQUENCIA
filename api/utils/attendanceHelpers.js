@@ -74,8 +74,50 @@ export function validatePunchTime(punchType, currentTime, schedule, toleranceMin
 
 /**
  * Busca funcionário com seu horário de trabalho
+ * Suporta múltiplos departamentos - usa o departamento principal ou o especificado
  */
-export async function getEmployeeWithSchedule(employeeId) {
+export async function getEmployeeWithSchedule(employeeId, departmentId = null) {
+  // Se um departamento específico foi passado, buscar schedule desse departamento
+  if (departmentId) {
+    const deptResult = await pool.query(
+      `SELECT e.*, 
+              ed.department_id, ed.schedule_id, ed.is_primary,
+              s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name,
+              d.name as department_name, p.name as position_name
+       FROM employees e
+       LEFT JOIN employee_departments ed ON e.id = ed.employee_id AND ed.department_id = $2
+       LEFT JOIN schedules s ON ed.schedule_id = s.id
+       LEFT JOIN departments d ON ed.department_id = d.id
+       LEFT JOIN positions p ON e.position_id = p.id
+       WHERE e.id = $1`,
+      [employeeId, departmentId]
+    );
+
+    if (deptResult.rows.length > 0 && deptResult.rows[0].department_id) {
+      return deptResult.rows[0];
+    }
+  }
+
+  // Buscar pelo departamento principal na nova tabela
+  const primaryResult = await pool.query(
+    `SELECT e.*, 
+            ed.department_id, ed.schedule_id, ed.is_primary,
+            s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name,
+            d.name as department_name, p.name as position_name
+     FROM employees e
+     LEFT JOIN employee_departments ed ON e.id = ed.employee_id AND ed.is_primary = true
+     LEFT JOIN schedules s ON ed.schedule_id = s.id
+     LEFT JOIN departments d ON ed.department_id = d.id
+     LEFT JOIN positions p ON e.position_id = p.id
+     WHERE e.id = $1`,
+    [employeeId]
+  );
+
+  if (primaryResult.rows.length > 0 && primaryResult.rows[0].schedule_id) {
+    return primaryResult.rows[0];
+  }
+
+  // Fallback: buscar pela tabela employees diretamente (retrocompatibilidade)
   const result = await pool.query(
     `SELECT e.*, e.schedule_id,
             s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name,
@@ -89,6 +131,26 @@ export async function getEmployeeWithSchedule(employeeId) {
   );
 
   return result.rows[0] || null;
+}
+
+/**
+ * Busca todos os departamentos de um funcionário com seus horários
+ */
+export async function getEmployeeDepartments(employeeId) {
+  const result = await pool.query(
+    `SELECT ed.*, 
+            d.name as department_name,
+            s.name as schedule_name,
+            s.start_time, s.end_time, s.break_start, s.break_end
+     FROM employee_departments ed
+     LEFT JOIN departments d ON ed.department_id = d.id
+     LEFT JOIN schedules s ON ed.schedule_id = s.id
+     WHERE ed.employee_id = $1
+     ORDER BY ed.is_primary DESC, d.name ASC`,
+    [employeeId]
+  );
+
+  return result.rows;
 }
 
 /**

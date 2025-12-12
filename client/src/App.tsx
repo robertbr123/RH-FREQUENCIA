@@ -3,7 +3,7 @@ import { Suspense, lazy } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { SettingsProvider } from './context/SettingsContext'
 import { ThemeProvider } from './context/ThemeContext'
-import { PermissionsProvider } from './context/PermissionsContext'
+import { PermissionsProvider, usePermissions } from './context/PermissionsContext'
 import { PortalAuthProvider, usePortalAuth } from './context/PortalAuthContext'
 import Layout from './components/Layout'
 import Loading from './components/Loading'
@@ -38,17 +38,34 @@ const PortalVacations = lazy(() => import('./pages/portal/PortalVacations'))
 const PortalRequests = lazy(() => import('./pages/portal/PortalRequests'))
 const PortalNotifications = lazy(() => import('./pages/portal/PortalNotifications'))
 const PortalInbox = lazy(() => import('./pages/portal/PortalInbox'))
+const PortalEvents = lazy(() => import('./pages/portal/PortalEvents'))
 import PortalLayout from './components/portal/PortalLayout'
 
-function PrivateRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: string[] }) {
+function PrivateRoute({ children, allowedRoles, requiredPermission }: { 
+  children: React.ReactNode; 
+  allowedRoles?: string[];
+  requiredPermission?: string;
+}) {
   const { isAuthenticated, user } = useAuth()
+  const { hasPermission, loading: permissionsLoading } = usePermissions()
   
   if (!isAuthenticated) {
     return <Navigate to="/admin/login" />
   }
   
+  // Se está carregando permissões, mostra loading
+  if (permissionsLoading) {
+    return <Loading fullScreen text="Verificando permissões..." />
+  }
+  
+  // Verifica role básico
   if (allowedRoles && !allowedRoles.includes(user?.role || '')) {
     return <Navigate to="/admin/scanner" />
+  }
+  
+  // Verifica permissão específica
+  if (requiredPermission && !hasPermission(requiredPermission)) {
+    return <Navigate to="/admin" />
   }
   
   return <>{children}</>
@@ -100,6 +117,7 @@ function PortalRoutes() {
           <Route path="solicitacoes" element={<PortalRequests />} />
           <Route path="notificacoes" element={<PortalNotifications />} />
           <Route path="inbox" element={<PortalInbox />} />
+          <Route path="eventos" element={<PortalEvents />} />
         </Route>
         {/* Redirecionar rotas não encontradas do portal */}
         <Route path="*" element={<Navigate to="/portal" />} />
@@ -144,27 +162,27 @@ function App() {
                     }
                   >
                     <Route index element={
-                      <PrivateRoute allowedRoles={['admin', 'gestor']}>
+                      <PrivateRoute requiredPermission="dashboard.view">
                         <Dashboard />
                       </PrivateRoute>
                     } />
                     <Route path="employees" element={
-                      <PrivateRoute allowedRoles={['admin', 'gestor']}>
+                      <PrivateRoute requiredPermission="employees.view">
                         <Employees />
                       </PrivateRoute>
                     } />
                     <Route path="attendance" element={
-                      <PrivateRoute allowedRoles={['admin', 'gestor']}>
+                      <PrivateRoute requiredPermission="attendance.view">
                         <Attendance />
                       </PrivateRoute>
                     } />
                     <Route path="organization" element={
-                      <PrivateRoute allowedRoles={['admin']}>
+                      <PrivateRoute requiredPermission="organization.view">
                         <Organization />
                       </PrivateRoute>
                     } />
                     <Route path="users" element={
-                      <PrivateRoute allowedRoles={['admin']}>
+                      <PrivateRoute requiredPermission="users.view">
                         <Users />
                       </PrivateRoute>
                     } />
@@ -172,42 +190,44 @@ function App() {
                       <Profile />
                     } />
                     <Route path="settings" element={
-                      <PrivateRoute allowedRoles={['admin']}>
+                      <PrivateRoute requiredPermission="settings.view">
                         <Settings />
                       </PrivateRoute>
                     } />
                     <Route path="reports" element={
-                      <PrivateRoute allowedRoles={['admin', 'gestor']}>
+                      <PrivateRoute requiredPermission="reports.view">
                         <Reports />
                       </PrivateRoute>
                     } />
                     <Route path="attendance-admin" element={
-                      <PrivateRoute allowedRoles={['admin']}>
+                      <PrivateRoute requiredPermission="attendance.admin">
                         <AttendanceAdmin />
                       </PrivateRoute>
                     } />
                     <Route path="backup" element={
-                      <PrivateRoute allowedRoles={['admin']}>
+                      <PrivateRoute requiredPermission="backup.view">
                         <Backup />
                       </PrivateRoute>
                     } />
                     <Route path="hour-bank" element={
-                      <PrivateRoute allowedRoles={['admin', 'gestor']}>
+                      <PrivateRoute requiredPermission="hourbank.view">
                         <HourBank />
                       </PrivateRoute>
                     } />
                     <Route path="geolocation" element={
-                      <PrivateRoute allowedRoles={['admin']}>
+                      <PrivateRoute requiredPermission="geolocation.view">
                         <GeolocSettings />
                       </PrivateRoute>
                     } />
                     <Route path="notifications" element={
-                      <PrivateRoute allowedRoles={['admin', 'gestor']}>
+                      <PrivateRoute requiredPermission="notifications.view">
                         <AdminNotifications />
                       </PrivateRoute>
                     } />
                     <Route path="scanner" element={
-                      <Scanner />
+                      <PrivateRoute requiredPermission="scanner.view">
+                        <Scanner />
+                      </PrivateRoute>
                     } />
                   </Route>
                   
