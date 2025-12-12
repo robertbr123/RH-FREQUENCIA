@@ -36,6 +36,7 @@ services:
       - "80:80"      # HTTP (redireciona para HTTPS)
       - "443:443"    # HTTPS
     volumes:
+    # mentioned in dokploy file
       - ./nginx-ssl.conf:/etc/nginx/conf.d/default.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
