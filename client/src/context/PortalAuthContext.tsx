@@ -193,15 +193,31 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    // Parar verificação de notificações em background
+    // Limpar caches do Service Worker e parar verificação de notificações
     if ('serviceWorker' in navigator) {
       try {
         const registration = await navigator.serviceWorker.ready;
+        // Enviar comando de logout para limpar todos os caches
         registration.active?.postMessage({
-          type: 'STOP_NOTIFICATION_CHECK'
+          type: 'PORTAL_LOGOUT'
         });
       } catch (error) {
-        console.error('Erro ao parar notificações:', error);
+        console.error('Erro ao limpar caches do Service Worker:', error);
+      }
+    }
+    
+    // Limpar caches do navegador (se disponível)
+    if ('caches' in window) {
+      try {
+        const cacheNames = await caches.keys();
+        for (const cacheName of cacheNames) {
+          if (cacheName.includes('rhf-offline') || cacheName.includes('rhf-notifications')) {
+            await caches.delete(cacheName);
+            console.log(`Cache ${cacheName} removido`);
+          }
+        }
+      } catch (error) {
+        console.error('Erro ao limpar caches do navegador:', error);
       }
     }
     

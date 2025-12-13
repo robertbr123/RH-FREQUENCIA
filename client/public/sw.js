@@ -1,4 +1,4 @@
-const VERSION = 'v6';
+const VERSION = 'v7';
 const APP_SHELL = `rhf-app-shell-${VERSION}`;
 const RUNTIME_STATIC = `rhf-runtime-static-${VERSION}`;
 const RUNTIME_IMAGES = `rhf-runtime-images-${VERSION}`;
@@ -215,8 +215,58 @@ self.addEventListener('message', async (event) => {
     case 'UPDATE_LAST_NOTIFICATION_ID':
       lastNotificationId = data.lastNotificationId || 0;
       break;
+      
+    case 'PORTAL_LOGOUT':
+      // Limpar todos os caches relacionados ao portal ao fazer logout
+      await clearPortalCaches();
+      stopNotificationCheck();
+      portalToken = null;
+      lastNotificationId = 0;
+      event.source?.postMessage({ type: 'PORTAL_LOGOUT_COMPLETE' });
+      break;
   }
 });
+
+// Função para limpar todos os caches do portal ao fazer logout
+async function clearPortalCaches() {
+  console.log('[SW] Limpando caches do portal...');
+  
+  try {
+    // Lista de caches para limpar (dados do usuário, não app shell)
+    const cachesToClear = [
+      OFFLINE_DATA,
+      OFFLINE_QUEUE,
+      NOTIFICATIONS_CACHE
+    ];
+    
+    for (const cacheName of cachesToClear) {
+      try {
+        const cache = await caches.open(cacheName);
+        const keys = await cache.keys();
+        for (const key of keys) {
+          await cache.delete(key);
+        }
+        console.log(`[SW] Cache ${cacheName} limpo`);
+      } catch (error) {
+        console.error(`[SW] Erro ao limpar cache ${cacheName}:`, error);
+      }
+    }
+    
+    // Limpar também qualquer dado cacheado da API do portal
+    const runtimeCache = await caches.open(RUNTIME_STATIC);
+    const runtimeKeys = await runtimeCache.keys();
+    for (const key of runtimeKeys) {
+      if (key.url.includes('/api/portal/')) {
+        await runtimeCache.delete(key);
+        console.log(`[SW] Removido cache de API: ${key.url}`);
+      }
+    }
+    
+    console.log('[SW] Caches do portal limpos com sucesso');
+  } catch (error) {
+    console.error('[SW] Erro ao limpar caches do portal:', error);
+  }
+}
 
 function scheduleLocalNotifications(schedule, reminderMinutes, settings) {
   cancelAllScheduledNotifications();
