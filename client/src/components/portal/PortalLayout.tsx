@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { useOfflineSync } from '../../hooks/useOfflineSync';
 import { usePortalAuth } from '../../context/PortalAuthContext';
 import axios from 'axios';
 import { 
   Home, Camera, Calendar, User, 
-  Download, X, Share, WifiOff, Inbox
+  Download, X, Share, Inbox
 } from 'lucide-react';
-import OfflineIndicator from './OfflineIndicator';
 import NotificationToast from './NotificationToast';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -27,7 +25,6 @@ interface PortalNotification {
 export default function PortalLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isOnline, pendingCount, cachePortalData } = useOfflineSync();
   const { logout } = usePortalAuth();
   
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -41,11 +38,6 @@ export default function PortalLayout() {
   const [toastNotification, setToastNotification] = useState<PortalNotification | null>(null);
   const lastNotificationIdRef = useRef<number | null>(null);
   const shownNotificationsRef = useRef<Set<number>>(new Set());
-
-  // Cachear dados do portal para modo offline ao inicializar
-  useEffect(() => {
-    cachePortalData();
-  }, [cachePortalData]);
 
   // Iniciar verificação de notificações em background no Service Worker
   useEffect(() => {
@@ -361,9 +353,6 @@ export default function PortalLayout() {
         </div>
       )}
 
-      {/* Indicador de Status Offline */}
-      <OfflineIndicator />
-
       {/* Conteúdo */}
       <div className={hideNav ? '' : 'pb-20'}>
         <Outlet />
@@ -375,8 +364,6 @@ export default function PortalLayout() {
           <div className="flex justify-around items-center h-16 max-w-lg mx-auto">
             {navItems.map((item) => {
               const isActive = location.pathname === item.path;
-              // Mostrar badge de pendência no ícone de Ponto se houver itens offline
-              const showPendingBadge = item.path === '/portal/ponto' && pendingCount > 0;
               // Mostrar badge de notificações não lidas no Inbox
               const showNotificationBadge = item.badge && item.badge > 0;
               
@@ -390,18 +377,10 @@ export default function PortalLayout() {
                 >
                   <div className="relative">
                     <item.icon className={`w-6 h-6 ${isActive ? 'scale-110' : ''} transition-transform`} />
-                    {showPendingBadge && (
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-orange-500 rounded-full flex items-center justify-center">
-                        <span className="text-[8px] text-white font-bold">{pendingCount}</span>
-                      </div>
-                    )}
                     {showNotificationBadge && (
                       <div className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
                         <span className="text-[8px] text-white font-bold">{item.badge! > 9 ? '9+' : item.badge}</span>
                       </div>
-                    )}
-                    {!isOnline && item.path === '/portal/ponto' && (
-                      <WifiOff className="absolute -top-1 -right-1 w-3 h-3 text-yellow-400" />
                     )}
                   </div>
                   <span className="text-[10px] mt-1 font-medium">{item.label}</span>

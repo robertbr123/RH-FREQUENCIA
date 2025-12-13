@@ -7,7 +7,6 @@ export { useCapsLock } from './useCapsLock'
 export { useDashboardData } from './useDashboardData'
 export { useChristmasSeason } from './useChristmasSeason'
 export { useGeolocation, calculateDistance, isWithinAllowedArea, validateLocationAgainstAllowed, fetchAllowedLocations } from './useGeolocation'
-export { useOfflineSync } from './useOfflineSync'
 export { usePushNotifications } from './usePushNotifications'
 export { useServerTime } from './useServerTime'
 export type { 

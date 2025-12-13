@@ -5,7 +5,7 @@ import { useGeolocation, validateLocationAgainstAllowed, fetchAllowedLocations, 
 import axios from 'axios';
 import { 
   Camera, ArrowLeft, CheckCircle, XCircle, AlertTriangle,
-  Loader2, User, MapPin, MapPinOff, Shield, CloudOff, Building2, Clock
+  Loader2, User, MapPin, MapPinOff, Shield, Building2, Clock
 } from 'lucide-react';
 import { Snowfall } from '../../components/christmas';
 
@@ -244,28 +244,6 @@ export default function PortalPunch() {
         department_id: selectedDepartment // Enviar departamento selecionado
       });
       
-      // Verificar se foi salvo offline (status 202)
-      if (response.status === 202 || response.data?.offline) {
-        setResult({
-          success: true,
-          message: response.data.message || 'Ponto salvo offline. Será sincronizado quando a conexão voltar.',
-          punch_type: nextPunch,
-          punch_time: new Date().toLocaleTimeString('pt-BR', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            timeZone: 'America/Rio_Branco'
-          }),
-          type: 'offline'
-        });
-        setScanning(false);
-        
-        // Vibrar em sucesso (mobile) - padrão diferente para offline
-        if ('vibrate' in navigator) {
-          navigator.vibrate([100, 100, 100, 100, 100]);
-        }
-        return;
-      }
-      
       setResult(response.data);
       setScanning(false);
       
@@ -277,38 +255,19 @@ export default function PortalPunch() {
     } catch (err: any) {
       const errorMsg = err.response?.data?.error || 'Erro ao registrar ponto';
       const errorType = err.response?.data?.type;
-      const isOffline = err.response?.data?.offline || !navigator.onLine;
       
       // Se for erro de face não reconhecida (outra pessoa)
       if (errorType === 'face_mismatch' || err.response?.status === 401) {
         setFaceMismatch(true);
         setScanning(false);
         setError(errorMsg);
-      } else if (isOffline) {
-        // Modo offline - mostrar como sucesso pendente
-        setResult({
-          success: true,
-          message: 'Ponto salvo offline. Será sincronizado automaticamente quando a conexão voltar.',
-          punch_type: nextPunch,
-          punch_time: new Date().toLocaleTimeString('pt-BR', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            timeZone: 'America/Rio_Branco'
-          }),
-          type: 'offline'
-        });
-        setScanning(false);
-        
-        if ('vibrate' in navigator) {
-          navigator.vibrate([100, 100, 100, 100, 100]);
-        }
       } else {
         setError(errorMsg);
         setScanning(false);
       }
       
       // Vibrar erro (mobile)
-      if (!isOffline && 'vibrate' in navigator) {
+      if ('vibrate' in navigator) {
         navigator.vibrate([200, 100, 200, 100, 200]);
       }
     } finally {
@@ -503,12 +462,9 @@ export default function PortalPunch() {
             // Resultado do ponto
             <div className="p-6 text-center">
               <div className={`w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center ${
-                result.type === 'offline' ? 'bg-orange-500/20' :
                 result.success ? 'bg-green-500/20' : 'bg-red-500/20'
               }`}>
-                {result.type === 'offline' ? (
-                  <CloudOff className="w-10 h-10 text-orange-400" />
-                ) : result.success ? (
+                {result.success ? (
                   <CheckCircle className="w-10 h-10 text-green-400" />
                 ) : (
                   <XCircle className="w-10 h-10 text-red-400" />
@@ -516,10 +472,9 @@ export default function PortalPunch() {
               </div>
               
               <h2 className={`text-xl font-bold mb-2 ${
-                result.type === 'offline' ? 'text-orange-400' :
                 result.success ? 'text-green-400' : 'text-red-400'
               }`}>
-                {result.type === 'offline' ? 'Ponto Salvo Offline' : result.success ? 'Ponto Registrado!' : 'Erro'}
+                {result.success ? 'Ponto Registrado!' : 'Erro'}
               </h2>
               
               <p className="text-white/70 mb-4">{result.message}</p>
@@ -528,28 +483,11 @@ export default function PortalPunch() {
                 <div className="bg-white/5 rounded-xl p-4 mb-4">
                   <p className="text-white/50 text-sm">Horário registrado</p>
                   <p className="text-2xl font-bold text-white">{result.punch_time}</p>
-                  {result.type === 'offline' ? (
-                    <p className="text-orange-400 text-sm mt-1 flex items-center justify-center gap-1">
-                      ⏳ Aguardando sincronização
-                    </p>
-                  ) : result.face_match && (
+                  {result.face_match && (
                     <p className="text-green-400 text-sm mt-1">
                       ✓ Verificado ({result.face_match.confidence})
                     </p>
                   )}
-                </div>
-              )}
-              
-              {/* Aviso de modo offline */}
-              {result.type === 'offline' && (
-                <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl p-4 mb-4 text-left">
-                  <p className="text-orange-400 text-sm flex items-start gap-2">
-                    <span className="text-lg">📶</span>
-                    <span>
-                      Seu ponto foi salvo localmente e será enviado automaticamente 
-                      quando sua conexão com a internet for restabelecida.
-                    </span>
-                  </p>
                 </div>
               )}
               
@@ -576,7 +514,7 @@ export default function PortalPunch() {
                 >
                   Voltar
                 </button>
-                {result.next_punch && !result.type && (
+                {result.next_punch && (
                   <button
                     onClick={() => {
                       setResult(null);

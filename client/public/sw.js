@@ -3,8 +3,6 @@ const APP_SHELL = `rhf-app-shell-${VERSION}`;
 const RUNTIME_STATIC = `rhf-runtime-static-${VERSION}`;
 const RUNTIME_IMAGES = `rhf-runtime-images-${VERSION}`;
 const RUNTIME_FONTS = `rhf-runtime-fonts-${VERSION}`;
-const OFFLINE_DATA = `rhf-offline-data-${VERSION}`;
-const OFFLINE_QUEUE = `rhf-offline-queue-${VERSION}`;
 const NOTIFICATIONS_CACHE = `rhf-notifications-${VERSION}`;
 
 const APP_SHELL_URLS = [
@@ -14,141 +12,6 @@ const APP_SHELL_URLS = [
   '/portal-icon-192.png',
   '/portal-icon-512.png'
 ];
-
-// URLs de API que devem ser cacheadas para modo offline
-const CACHEABLE_API_URLS = [
-  '/api/portal/me',
-  '/api/portal/attendance/today',
-  '/api/portal/schedule',
-  '/api/portal/push/settings',
-  '/api/portal/face-status'
-];
-
-// ==========================================
-// FILA OFFLINE PARA REQUISIÇÕES PENDENTES
-// ==========================================
-
-async function addToOfflineQueue(request) {
-  try {
-    const cache = await caches.open(OFFLINE_QUEUE);
-    const queueData = await getOfflineQueue();
-    
-    const queueItem = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      url: request.url,
-      method: request.method,
-      body: await request.clone().text(),
-      headers: Object.fromEntries(request.headers.entries()),
-      timestamp: Date.now()
-    };
-    
-    queueData.push(queueItem);
-    
-    await cache.put(
-      new Request('/_offline_queue'),
-      new Response(JSON.stringify(queueData), {
-        headers: { 'Content-Type': 'application/json' }
-      })
-    );
-    
-    console.log('[SW] Requisição adicionada à fila offline:', queueItem.id);
-    return queueItem;
-  } catch (error) {
-    console.error('[SW] Erro ao adicionar à fila offline:', error);
-    throw error;
-  }
-}
-
-async function getOfflineQueue() {
-  try {
-    const cache = await caches.open(OFFLINE_QUEUE);
-    const response = await cache.match(new Request('/_offline_queue'));
-    if (!response) return [];
-    return await response.json();
-  } catch (error) {
-    console.error('[SW] Erro ao ler fila offline:', error);
-    return [];
-  }
-}
-
-async function clearOfflineQueue() {
-  try {
-    const cache = await caches.open(OFFLINE_QUEUE);
-    await cache.delete(new Request('/_offline_queue'));
-    console.log('[SW] Fila offline limpa');
-  } catch (error) {
-    console.error('[SW] Erro ao limpar fila offline:', error);
-  }
-}
-
-async function removeFromOfflineQueue(itemId) {
-  try {
-    const cache = await caches.open(OFFLINE_QUEUE);
-    const queueData = await getOfflineQueue();
-    const filtered = queueData.filter(item => item.id !== itemId);
-    
-    await cache.put(
-      new Request('/_offline_queue'),
-      new Response(JSON.stringify(filtered), {
-        headers: { 'Content-Type': 'application/json' }
-      })
-    );
-    console.log('[SW] Item removido da fila offline:', itemId);
-  } catch (error) {
-    console.error('[SW] Erro ao remover da fila offline:', error);
-  }
-}
-
-async function processOfflineQueue() {
-  const queue = await getOfflineQueue();
-  
-  if (queue.length === 0) {
-    console.log('[SW] Fila offline vazia');
-    return { processed: 0, failed: 0 };
-  }
-  
-  console.log(`[SW] Processando ${queue.length} requisições offline...`);
-  
-  let processed = 0;
-  let failed = 0;
-  
-  for (const item of queue) {
-    try {
-      const response = await fetch(item.url, {
-        method: item.method,
-        headers: item.headers,
-        body: item.method !== 'GET' ? item.body : undefined
-      });
-      
-      if (response.ok) {
-        await removeFromOfflineQueue(item.id);
-        processed++;
-        console.log(`[SW] Requisição ${item.id} processada com sucesso`);
-      } else if (response.status === 401 || response.status === 409 || response.status === 400) {
-        await removeFromOfflineQueue(item.id);
-        failed++;
-        console.log(`[SW] Requisição ${item.id} falhou (${response.status}), removida da fila`);
-      }
-    } catch (error) {
-      console.error(`[SW] Erro ao processar requisição ${item.id}:`, error);
-      failed++;
-    }
-  }
-  
-  // Notificar o app
-  const allClients = await self.clients.matchAll({ type: 'window' });
-  const remainingQueue = await getOfflineQueue();
-  allClients.forEach(client => {
-    client.postMessage({
-      type: 'OFFLINE_QUEUE_PROCESSED',
-      processed,
-      failed,
-      remaining: remainingQueue.length
-    });
-  });
-  
-  return { processed, failed };
-}
 
 // ==========================================
 // NOTIFICAÇÕES LOCAIS AGENDADAS
@@ -175,26 +38,6 @@ self.addEventListener('message', async (event) => {
       cancelAllScheduledNotifications();
       break;
       
-    case 'PROCESS_OFFLINE_QUEUE':
-      const result = await processOfflineQueue();
-      event.source?.postMessage({ type: 'OFFLINE_QUEUE_RESULT', ...result });
-      break;
-      
-    case 'GET_OFFLINE_QUEUE':
-      const queue = await getOfflineQueue();
-      event.source?.postMessage({ type: 'OFFLINE_QUEUE_STATUS', queue });
-      break;
-      
-    case 'CLEAR_OFFLINE_QUEUE':
-      await clearOfflineQueue();
-      event.source?.postMessage({ type: 'OFFLINE_QUEUE_CLEARED' });
-      break;
-      
-    case 'CACHE_PORTAL_DATA':
-      await cachePortalData(data.token);
-      event.source?.postMessage({ type: 'PORTAL_DATA_CACHED' });
-      break;
-      
     // ==========================================
     // NOTIFICAÇÕES DO ADMIN EM BACKGROUND
     // ==========================================
@@ -215,58 +58,8 @@ self.addEventListener('message', async (event) => {
     case 'UPDATE_LAST_NOTIFICATION_ID':
       lastNotificationId = data.lastNotificationId || 0;
       break;
-      
-    case 'PORTAL_LOGOUT':
-      // Limpar todos os caches relacionados ao portal ao fazer logout
-      await clearPortalCaches();
-      stopNotificationCheck();
-      portalToken = null;
-      lastNotificationId = 0;
-      event.source?.postMessage({ type: 'PORTAL_LOGOUT_COMPLETE' });
-      break;
   }
 });
-
-// Função para limpar todos os caches do portal ao fazer logout
-async function clearPortalCaches() {
-  console.log('[SW] Limpando caches do portal...');
-  
-  try {
-    // Lista de caches para limpar (dados do usuário, não app shell)
-    const cachesToClear = [
-      OFFLINE_DATA,
-      OFFLINE_QUEUE,
-      NOTIFICATIONS_CACHE
-    ];
-    
-    for (const cacheName of cachesToClear) {
-      try {
-        const cache = await caches.open(cacheName);
-        const keys = await cache.keys();
-        for (const key of keys) {
-          await cache.delete(key);
-        }
-        console.log(`[SW] Cache ${cacheName} limpo`);
-      } catch (error) {
-        console.error(`[SW] Erro ao limpar cache ${cacheName}:`, error);
-      }
-    }
-    
-    // Limpar também qualquer dado cacheado da API do portal
-    const runtimeCache = await caches.open(RUNTIME_STATIC);
-    const runtimeKeys = await runtimeCache.keys();
-    for (const key of runtimeKeys) {
-      if (key.url.includes('/api/portal/')) {
-        await runtimeCache.delete(key);
-        console.log(`[SW] Removido cache de API: ${key.url}`);
-      }
-    }
-    
-    console.log('[SW] Caches do portal limpos com sucesso');
-  } catch (error) {
-    console.error('[SW] Erro ao limpar caches do portal:', error);
-  }
-}
 
 function scheduleLocalNotifications(schedule, reminderMinutes, settings) {
   cancelAllScheduledNotifications();
@@ -562,31 +355,6 @@ self.addEventListener('notificationclose', (event) => {
 });
 
 // ==========================================
-// CACHE DE DADOS DO PORTAL PARA OFFLINE
-// ==========================================
-
-async function cachePortalData(token) {
-  if (!token) return;
-  
-  const cache = await caches.open(OFFLINE_DATA);
-  
-  for (const url of CACHEABLE_API_URLS) {
-    try {
-      const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      
-      if (response.ok) {
-        await cache.put(new Request(url), response.clone());
-        console.log(`[SW] Dados cacheados: ${url}`);
-      }
-    } catch (error) {
-      console.error(`[SW] Erro ao cachear ${url}:`, error);
-    }
-  }
-}
-
-// ==========================================
 // INSTALAÇÃO E ATIVAÇÃO
 // ==========================================
 
@@ -626,17 +394,6 @@ self.addEventListener('activate', (event) => {
 });
 
 // ==========================================
-// BACKGROUND SYNC
-// ==========================================
-
-self.addEventListener('sync', (event) => {
-  console.log('[SW] Background sync:', event.tag);
-  if (event.tag === 'sync-offline-queue') {
-    event.waitUntil(processOfflineQueue());
-  }
-});
-
-// ==========================================
 // ESTRATÉGIAS DE CACHE
 // ==========================================
 
@@ -648,83 +405,15 @@ self.addEventListener('fetch', (event) => {
   }
   
   const isAPIRequest = url.includes('/api/');
-  const isPortalAPI = url.includes('/api/portal/');
   const isNavigate = event.request.mode === 'navigate';
   const method = event.request.method;
   
   // ==========================================
-  // APIs - Network First com Fallback Offline
+  // APIs - Network Only (sem cache para APIs)
   // ==========================================
   
   if (isAPIRequest) {
-    // POST/PUT/DELETE - Tentar enviar, se falhar adicionar à fila offline
-    if (method !== 'GET') {
-      event.respondWith(
-        fetch(event.request.clone())
-          .catch(async (error) => {
-            console.warn('[SW] Falha na requisição, verificando fila offline:', url);
-            
-            // Adicionar à fila offline apenas para requisições de ponto
-            if (isPortalAPI && url.includes('/punch')) {
-              try {
-                const queueItem = await addToOfflineQueue(event.request.clone());
-                
-                if ('sync' in self.registration) {
-                  await self.registration.sync.register('sync-offline-queue');
-                }
-                
-                return new Response(JSON.stringify({ 
-                  offline: true,
-                  queued: true,
-                  queueId: queueItem.id,
-                  message: 'Ponto salvo offline. Será sincronizado quando a conexão voltar.'
-                }), {
-                  status: 202,
-                  headers: { 'Content-Type': 'application/json' }
-                });
-              } catch (queueError) {
-                console.error('[SW] Erro ao adicionar à fila:', queueError);
-              }
-            }
-            
-            return new Response(JSON.stringify({ 
-              error: 'Sem conexão com a internet',
-              offline: true 
-            }), {
-              status: 503,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          })
-      );
-      return;
-    }
-    
-    // GET - Network first, fallback para cache offline
-    event.respondWith(
-      fetch(event.request)
-        .then(async (response) => {
-          if (response.ok && CACHEABLE_API_URLS.some(u => url.includes(u))) {
-            const cache = await caches.open(OFFLINE_DATA);
-            cache.put(event.request, response.clone());
-          }
-          return response;
-        })
-        .catch(async () => {
-          const cached = await caches.match(event.request);
-          if (cached) {
-            console.log('[SW] Retornando API do cache offline:', url);
-            return cached;
-          }
-          
-          return new Response(JSON.stringify({ 
-            error: 'Dados não disponíveis offline',
-            offline: true 
-          }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        })
-    );
+    // Requisições de API passam direto para o servidor
     return;
   }
   
