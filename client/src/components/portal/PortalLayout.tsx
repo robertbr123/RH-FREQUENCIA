@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useOfflineSync } from '../../hooks/useOfflineSync';
+import { usePortalAuth } from '../../context/PortalAuthContext';
 import axios from 'axios';
 import { 
   Home, Camera, Calendar, User, 
@@ -27,6 +28,7 @@ export default function PortalLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isOnline, pendingCount, cachePortalData } = useOfflineSync();
+  const { logout } = usePortalAuth();
   
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
@@ -162,15 +164,22 @@ export default function PortalLayout() {
         if (lastNotificationIdRef.current === null && notifications.length > 0) {
           lastNotificationIdRef.current = notifications[0].id;
         }
-      } catch (error) {
+      } catch (error: unknown) {
+        // Se token inválido/expirado, fazer logout
+        if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
+          console.log('Token inválido, fazendo logout...');
+          logout();
+          navigate('/portal/login');
+          return;
+        }
         console.error('Erro ao buscar notificações:', error);
       }
     };
 
     fetchNotifications();
     
-    // Verificar a cada 15 segundos para ser mais responsivo
-    const interval = setInterval(fetchNotifications, 15000);
+    // Verificar a cada 30 segundos (sincronizado com o Service Worker)
+    const interval = setInterval(fetchNotifications, 30000);
     return () => clearInterval(interval);
   }, [location.pathname]);
 

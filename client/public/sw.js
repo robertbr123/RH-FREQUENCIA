@@ -333,8 +333,9 @@ async function checkForNewNotifications() {
     });
     
     if (!response.ok) {
-      if (response.status === 401) {
-        // Token expirado, parar verificação
+      if (response.status === 401 || response.status === 403) {
+        // Token expirado ou inválido, parar verificação
+        console.log('[SW] Token inválido (status ' + response.status + '), parando verificação');
         stopNotificationCheck();
         portalToken = null;
       }
