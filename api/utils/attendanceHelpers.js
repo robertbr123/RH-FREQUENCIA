@@ -1,5 +1,12 @@
 import pool from '../database.js';
 
+// Helper para verificar se um valor de tempo é válido (não vazio/null)
+function isValidTime(value) {
+  if (!value) return false;
+  const str = String(value).trim();
+  return str !== '' && str !== 'null' && str !== 'undefined';
+}
+
 /**
  * Determina o próximo tipo de ponto baseado nos já registrados
  */
@@ -13,7 +20,15 @@ export async function getNextPunchType(employeeId, date, schedule) {
   );
 
   const registered = punches.rows.map(p => p.punch_type);
-  const hasBreak = schedule && schedule.break_start && schedule.break_end;
+  // Verificar se tem intervalo - tratar valores vazios/null como false
+  const hasBreak = isValidTime(schedule?.break_start) && isValidTime(schedule?.break_end);
+
+  console.log('[getNextPunchType] Schedule:', { 
+    break_start: schedule?.break_start, 
+    break_end: schedule?.break_end, 
+    hasBreak,
+    registered 
+  });
 
   if (!registered.includes('entry')) {
     return { type: 'entry', message: 'Entrada registrada', next: hasBreak ? 'Saída para intervalo' : 'Saída final' };
@@ -74,54 +89,19 @@ export function validatePunchTime(punchType, currentTime, schedule, toleranceMin
 
 /**
  * Busca funcionário com seu horário de trabalho
- * Suporta múltiplos departamentos - usa o departamento principal ou o especificado
+ * PRIORIDADE: employees.schedule_id (horário principal definido no cadastro)
+ * employee_departments.schedule_id só é usado se for explicitamente diferente
  */
 export async function getEmployeeWithSchedule(employeeId, departmentId = null) {
-  // Se um departamento específico foi passado, buscar schedule desse departamento
-  if (departmentId) {
-    const deptResult = await pool.query(
-      `SELECT e.*, 
-              ed.department_id, ed.schedule_id, ed.is_primary,
-              s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name,
-              d.name as department_name, p.name as position_name
-       FROM employees e
-       LEFT JOIN employee_departments ed ON e.id = ed.employee_id AND ed.department_id = $2
-       LEFT JOIN schedules s ON ed.schedule_id = s.id
-       LEFT JOIN departments d ON ed.department_id = d.id
-       LEFT JOIN positions p ON e.position_id = p.id
-       WHERE e.id = $1`,
-      [employeeId, departmentId]
-    );
-
-    if (deptResult.rows.length > 0 && deptResult.rows[0].department_id) {
-      return deptResult.rows[0];
-    }
-  }
-
-  // Buscar pelo departamento principal na nova tabela
-  const primaryResult = await pool.query(
-    `SELECT e.*, 
-            ed.department_id, ed.schedule_id, ed.is_primary,
-            s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name,
-            d.name as department_name, p.name as position_name
-     FROM employees e
-     LEFT JOIN employee_departments ed ON e.id = ed.employee_id AND ed.is_primary = true
-     LEFT JOIN schedules s ON ed.schedule_id = s.id
-     LEFT JOIN departments d ON ed.department_id = d.id
-     LEFT JOIN positions p ON e.position_id = p.id
-     WHERE e.id = $1`,
-    [employeeId]
-  );
-
-  if (primaryResult.rows.length > 0 && primaryResult.rows[0].schedule_id) {
-    return primaryResult.rows[0];
-  }
-
-  // Fallback: buscar pela tabela employees diretamente (retrocompatibilidade)
+  // Buscar funcionário com seu schedule principal (da tabela employees)
+  // O schedule da tabela employees é o "Horário de Trabalho" definido no cadastro
   const result = await pool.query(
-    `SELECT e.*, e.schedule_id,
+    `SELECT e.*, 
+            e.department_id,
+            e.schedule_id,
             s.start_time, s.end_time, s.break_start, s.break_end, s.name as schedule_name,
-            d.name as department_name, p.name as position_name
+            d.name as department_name,
+            p.name as position_name
      FROM employees e
      LEFT JOIN schedules s ON e.schedule_id = s.id
      LEFT JOIN departments d ON e.department_id = d.id
@@ -130,7 +110,19 @@ export async function getEmployeeWithSchedule(employeeId, departmentId = null) {
     [employeeId]
   );
 
-  return result.rows[0] || null;
+  if (result.rows.length > 0) {
+    const employee = result.rows[0];
+    console.log('[getEmployeeWithSchedule] Resultado:', { 
+      employeeId,
+      schedule_id: employee.schedule_id,
+      schedule_name: employee.schedule_name,
+      break_start: employee.break_start,
+      break_end: employee.break_end
+    });
+    return employee;
+  }
+
+  return null;
 }
 
 /**
