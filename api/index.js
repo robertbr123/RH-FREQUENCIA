@@ -17,6 +17,7 @@ import permissionsRoutes from './routes/permissions.js';
 import employeePortalRoutes from './routes/employeePortal.js';
 import adminNotificationsRoutes from './routes/adminNotifications.js';
 import integrationRoutes from './routes/integration.js';
+import { initRedisConnection, isCacheAvailable, getCacheStats } from './utils/dragonflyCache.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -59,12 +60,27 @@ const initDB = async () => {
   }
 };
 
+// Inicializar Redis
+const initRedis = async () => {
+  try {
+    await initRedisConnection();
+    console.log('✅ Redis initialized');
+  } catch (err) {
+    console.warn('⚠️ Redis não disponível (fallback para banco):', err.message);
+  }
+};
+
 // Inicializar apenas uma vez no startup (não em cada request)
 let dbInitStarted = false;
+let redisInitStarted = false;
 app.use(async (req, res, next) => {
   if (!dbInitStarted) {
     dbInitStarted = true;
     await initDB();
+  }
+  if (!redisInitStarted) {
+    redisInitStarted = true;
+    await initRedis();
   }
   next();
 });
@@ -87,12 +103,24 @@ app.use('/api/admin/notifications', adminNotificationsRoutes);
 app.use('/api/integration', integrationRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let redisStatus = { available: false };
+  try {
+    redisStatus = await getCacheStats();
+  } catch (err) {
+    redisStatus = { available: false, error: err.message };
+  }
+  
   res.json({ 
     status: 'ok', 
     message: 'Sistema de RH - Frequência',
     timestamp: new Date().toISOString(),
-    dbInitialized: dbInitStarted
+    dbInitialized: dbInitStarted,
+    redis: {
+      initialized: redisInitStarted,
+      connected: isCacheAvailable(),
+      ...redisStatus
+    }
   });
 });
 
