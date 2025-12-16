@@ -92,10 +92,15 @@ export default function PortalNotifications() {
     { value: 30, label: '30 min' },
   ];
 
+  // Verifica se o horário tem intervalo
+  const hasBreak = schedule?.break_start && schedule?.break_end;
+
   const punchTypes = [
     { key: 'remind_entry', label: 'Entrada', time: schedule?.entry_time, color: 'green' },
-    { key: 'remind_break_start', label: 'Início Intervalo', time: schedule?.break_start, color: 'yellow' },
-    { key: 'remind_break_end', label: 'Fim Intervalo', time: schedule?.break_end, color: 'blue' },
+    ...(hasBreak ? [
+      { key: 'remind_break_start', label: 'Início Intervalo', time: schedule?.break_start, color: 'yellow' },
+      { key: 'remind_break_end', label: 'Fim Intervalo', time: schedule?.break_end, color: 'blue' },
+    ] : []),
     { key: 'remind_exit', label: 'Saída', time: schedule?.exit_time, color: 'red' },
   ];
 
@@ -370,19 +375,23 @@ export default function PortalNotifications() {
                     Reagendar
                   </button>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className={`grid ${hasBreak ? 'grid-cols-2 gap-4' : 'grid-cols-2 gap-4'}`}>
                   <div className="text-center p-3 rounded-xl bg-green-500/10">
                     <p className="text-green-400 font-mono text-xl">{formatTime(schedule.entry_time)}</p>
                     <p className="text-white/50 text-xs mt-1">Entrada</p>
                   </div>
-                  <div className="text-center p-3 rounded-xl bg-yellow-500/10">
-                    <p className="text-yellow-400 font-mono text-xl">{formatTime(schedule.break_start)}</p>
-                    <p className="text-white/50 text-xs mt-1">Início Intervalo</p>
-                  </div>
-                  <div className="text-center p-3 rounded-xl bg-blue-500/10">
-                    <p className="text-blue-400 font-mono text-xl">{formatTime(schedule.break_end)}</p>
-                    <p className="text-white/50 text-xs mt-1">Fim Intervalo</p>
-                  </div>
+                  {hasBreak && (
+                    <>
+                      <div className="text-center p-3 rounded-xl bg-yellow-500/10">
+                        <p className="text-yellow-400 font-mono text-xl">{formatTime(schedule.break_start)}</p>
+                        <p className="text-white/50 text-xs mt-1">Início Intervalo</p>
+                      </div>
+                      <div className="text-center p-3 rounded-xl bg-blue-500/10">
+                        <p className="text-blue-400 font-mono text-xl">{formatTime(schedule.break_end)}</p>
+                        <p className="text-white/50 text-xs mt-1">Fim Intervalo</p>
+                      </div>
+                    </>
+                  )}
                   <div className="text-center p-3 rounded-xl bg-red-500/10">
                     <p className="text-red-400 font-mono text-xl">{formatTime(schedule.exit_time)}</p>
                     <p className="text-white/50 text-xs mt-1">Saída</p>

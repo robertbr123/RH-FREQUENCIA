@@ -15,6 +15,7 @@ interface Settings {
   time_format: string
   language: string
   attendance_tolerance_minutes: number
+  entry_block_tolerance_minutes: number
   max_daily_hours: number
   enable_facial_recognition: boolean
   enable_qr_scanner: boolean
@@ -44,6 +45,7 @@ const defaultSettings: Settings = {
   time_format: '24h',
   language: 'pt-BR',
   attendance_tolerance_minutes: 5,
+  entry_block_tolerance_minutes: 60,
   max_daily_hours: 12,
   enable_facial_recognition: true,
   enable_qr_scanner: true,

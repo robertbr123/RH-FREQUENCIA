@@ -393,7 +393,7 @@ router.get('/attendance', authenticatePortalToken, async (req, res) => {
 // Obter resumo do ponto de hoje
 router.get('/attendance/today', authenticatePortalToken, async (req, res) => {
   try {
-    // Horário já está gravado em Rio Branco, ler diretamente
+    // Buscar pontos do dia
     const result = await pool.query(
       `SELECT 
          punch_type,
@@ -404,6 +404,31 @@ router.get('/attendance/today', authenticatePortalToken, async (req, res) => {
        ORDER BY punch_time`,
       [req.employee.id]
     );
+
+    // Buscar horário do funcionário para verificar se tem intervalo e horário de entrada
+    // Usa o schedule_id da tabela employees (horário principal definido no cadastro)
+    const scheduleResult = await pool.query(
+      `SELECT s.start_time, s.break_start, s.break_end
+       FROM employees e
+       LEFT JOIN schedules s ON e.schedule_id = s.id
+       WHERE e.id = $1`,
+      [req.employee.id]
+    );
+
+    const schedule = scheduleResult.rows[0];
+    // Verificar se tem intervalo - tratar strings vazias como NULL
+    const startTimeStr = schedule?.start_time ? String(schedule.start_time).trim() : '';
+    const breakStartStr = schedule?.break_start ? String(schedule.break_start).trim() : '';
+    const breakEndStr = schedule?.break_end ? String(schedule.break_end).trim() : '';
+    const hasBreak = breakStartStr !== '' && breakEndStr !== '';
+
+    // Log para debug do problema de meio período
+    logger.debug('Verificando horário do funcionário', { 
+      employeeId: req.employee.id,
+      break_start: schedule?.break_start,
+      break_end: schedule?.break_end,
+      hasBreak 
+    });
 
     const punches = {
       entry: null,
@@ -416,12 +441,51 @@ router.get('/attendance/today', authenticatePortalToken, async (req, res) => {
       punches[row.punch_type] = row.time;
     });
 
-    // Calcular próximo ponto esperado
+    // Calcular próximo ponto esperado baseado no horário do funcionário
     let nextPunch = 'entry';
-    if (punches.entry && !punches.break_start) nextPunch = 'break_start';
-    else if (punches.break_start && !punches.break_end) nextPunch = 'break_end';
-    else if (punches.break_end && !punches.exit) nextPunch = 'exit';
-    else if (punches.exit) nextPunch = 'completed';
+    let entryBlocked = false;
+    let entryBlockedMessage = '';
+    
+    if (hasBreak) {
+      // Horário COM intervalo: entry → break_start → break_end → exit
+      if (punches.entry && !punches.break_start) nextPunch = 'break_start';
+      else if (punches.break_start && !punches.break_end) nextPunch = 'break_end';
+      else if (punches.break_end && !punches.exit) nextPunch = 'exit';
+      else if (punches.exit) nextPunch = 'completed';
+    } else {
+      // Horário SEM intervalo (meio período): entry → exit
+      if (punches.entry && !punches.exit) nextPunch = 'exit';
+      else if (punches.exit) nextPunch = 'completed';
+    }
+
+    // Verificar se entrada está bloqueada por atraso (configurável)
+    if (nextPunch === 'entry' && startTimeStr) {
+      // Buscar tolerância configurada
+      const settingsResult = await pool.query(
+        'SELECT entry_block_tolerance_minutes FROM system_settings ORDER BY id LIMIT 1'
+      );
+      const entryBlockTolerance = settingsResult.rows[0]?.entry_block_tolerance_minutes ?? 60;
+      
+      const now = new Date();
+      const currentTime = now.toLocaleString('en-US', { 
+        timeZone: 'America/Rio_Branco', 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false 
+      });
+      
+      const [scheduleHour, scheduleMinute] = startTimeStr.split(':').map(Number);
+      const [currentHour, currentMinute] = currentTime.split(':').map(Number);
+      
+      const scheduleMinutes = scheduleHour * 60 + scheduleMinute;
+      const currentMinutes = currentHour * 60 + currentMinute;
+      const diffMinutes = currentMinutes - scheduleMinutes;
+      
+      if (diffMinutes > entryBlockTolerance) {
+        entryBlocked = true;
+        entryBlockedMessage = `Você está ${diffMinutes} minutos atrasado. O limite para registro de entrada é de ${entryBlockTolerance} minutos após o horário definido (${startTimeStr.substring(0, 5)}). Para justificar, procure o RH.`;
+      }
+    }
 
     // Incluir horário do servidor para sincronização
     const now = new Date();
@@ -431,6 +495,10 @@ router.get('/attendance/today', authenticatePortalToken, async (req, res) => {
       date: new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Rio_Branco' }),
       punches,
       nextPunch,
+      hasBreak, // Enviar para o frontend saber se deve mostrar intervalo
+      entryBlocked, // Indica se entrada está bloqueada por atraso
+      entryBlockedMessage, // Mensagem de bloqueio
+      scheduleStartTime: startTimeStr ? startTimeStr.substring(0, 5) : null, // Horário de entrada esperado
       server_time: brasilTime.getTime()
     });
   } catch (error) {
@@ -932,6 +1000,22 @@ router.post('/punch/facial', authenticatePortalToken, async (req, res) => {
 
     logger.debug('Verificação facial aprovada', { distance: distance.toFixed(4), threshold: THRESHOLD });
 
+    // Buscar horário do funcionário para verificar se tem intervalo e horário de entrada
+    // Usa o schedule_id da tabela employees (horário principal definido no cadastro)
+    const scheduleCheck = await pool.query(
+      `SELECT s.start_time, s.break_start, s.break_end
+       FROM employees e
+       LEFT JOIN schedules s ON e.schedule_id = s.id
+       WHERE e.id = $1`,
+      [employee.id]
+    );
+    // Verificar se tem intervalo - tratar strings vazias como NULL
+    const scheduleData = scheduleCheck.rows[0];
+    const startTimeStr = scheduleData?.start_time ? String(scheduleData.start_time).trim() : '';
+    const breakStartStr = scheduleData?.break_start ? String(scheduleData.break_start).trim() : '';
+    const breakEndStr = scheduleData?.break_end ? String(scheduleData.break_end).trim() : '';
+    const hasBreak = breakStartStr !== '' && breakEndStr !== '';
+
     // Verificar último ponto registrado hoje
     const todayResult = await pool.query(
       `SELECT (CURRENT_TIMESTAMP AT TIME ZONE 'America/Rio_Branco')::date as today`
@@ -945,18 +1029,76 @@ router.post('/punch/facial', authenticatePortalToken, async (req, res) => {
       [employee.id, today]
     );
 
-    // Determinar tipo do próximo ponto
+    // Determinar tipo do próximo ponto baseado no horário (com ou sem intervalo)
     let punchType = 'entry';
     if (lastPunchResult.rows.length > 0) {
       const lastPunch = lastPunchResult.rows[0].punch_type;
-      if (lastPunch === 'entry') punchType = 'break_start';
-      else if (lastPunch === 'break_start') punchType = 'break_end';
-      else if (lastPunch === 'break_end') punchType = 'exit';
-      else if (lastPunch === 'exit') {
-        return res.status(400).json({ 
+      
+      if (hasBreak) {
+        // Horário COM intervalo: entry → break_start → break_end → exit
+        if (lastPunch === 'entry') punchType = 'break_start';
+        else if (lastPunch === 'break_start') punchType = 'break_end';
+        else if (lastPunch === 'break_end') punchType = 'exit';
+        else if (lastPunch === 'exit') {
+          return res.status(400).json({ 
+            success: false,
+            type: 'completed',
+            message: 'Todos os pontos de hoje já foram registrados' 
+          });
+        }
+      } else {
+        // Horário SEM intervalo (meio período): entry → exit
+        if (lastPunch === 'entry') punchType = 'exit';
+        else if (lastPunch === 'exit') {
+          return res.status(400).json({ 
+            success: false,
+            type: 'completed',
+            message: 'Todos os pontos de hoje já foram registrados' 
+          });
+        }
+      }
+    }
+
+    // Bloquear entrada se estiver mais de X minutos atrasado (configurável)
+    if (punchType === 'entry' && startTimeStr) {
+      // Buscar tolerância configurada
+      const settingsResult = await pool.query(
+        'SELECT entry_block_tolerance_minutes FROM system_settings ORDER BY id LIMIT 1'
+      );
+      const entryBlockTolerance = settingsResult.rows[0]?.entry_block_tolerance_minutes ?? 60;
+      
+      const now = new Date();
+      const currentTime = now.toLocaleString('en-US', { 
+        timeZone: 'America/Rio_Branco', 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false 
+      });
+      
+      const [scheduleHour, scheduleMinute] = startTimeStr.split(':').map(Number);
+      const [currentHour, currentMinute] = currentTime.split(':').map(Number);
+      
+      const scheduleMinutes = scheduleHour * 60 + scheduleMinute;
+      const currentMinutes = currentHour * 60 + currentMinute;
+      const diffMinutes = currentMinutes - scheduleMinutes;
+      
+      // Se estiver mais de X minutos atrasado, bloquear
+      if (diffMinutes > entryBlockTolerance) {
+        logger.info('Entrada bloqueada por atraso excessivo (portal)', { 
+          employee_id: employee.id, 
+          schedule_time: startTimeStr, 
+          current_time: currentTime,
+          delay_minutes: diffMinutes,
+          tolerance_minutes: entryBlockTolerance
+        });
+        return res.status(403).json({
           success: false,
-          type: 'completed',
-          message: 'Todos os pontos de hoje já foram registrados' 
+          error: 'Não é possível registrar entrada',
+          message: `Você está ${diffMinutes} minutos atrasado. O limite para registro de entrada é de ${entryBlockTolerance} minutos após o horário definido (${startTimeStr.substring(0, 5)}). Para justificar, procure o RH.`,
+          type: 'late_entry_blocked',
+          schedule_time: startTimeStr.substring(0, 5),
+          current_time: currentTime,
+          delay_minutes: diffMinutes
         });
       }
     }
@@ -982,11 +1124,15 @@ router.post('/punch/facial', authenticatePortalToken, async (req, res) => {
       [employee.id, today]
     );
 
-    // Determinar próximo ponto
+    // Determinar próximo ponto baseado no horário (com ou sem intervalo)
     let nextPunch = null;
-    if (punchType === 'entry') nextPunch = 'break_start';
-    else if (punchType === 'break_start') nextPunch = 'break_end';
-    else if (punchType === 'break_end') nextPunch = 'exit';
+    if (hasBreak) {
+      if (punchType === 'entry') nextPunch = 'break_start';
+      else if (punchType === 'break_start') nextPunch = 'break_end';
+      else if (punchType === 'break_end') nextPunch = 'exit';
+    } else {
+      if (punchType === 'entry') nextPunch = 'exit';
+    }
 
     const punchLabels = {
       entry: 'Entrada',

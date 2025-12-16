@@ -79,6 +79,7 @@ export default function PortalPunch() {
   const [result, setResult] = useState<PunchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nextPunch, setNextPunch] = useState<string>('entry');
+  const [hasBreak, setHasBreak] = useState<boolean>(true); // Indica se o horário tem intervalo
   
   // Estados de geolocalização
   const [requireGeolocation, setRequireGeolocation] = useState(false);
@@ -112,6 +113,7 @@ export default function PortalPunch() {
         
         setHasFace(faceRes.data.has_face);
         setNextPunch(todayRes.data.nextPunch);
+        setHasBreak(todayRes.data.hasBreak !== false); // Se não vier, assume que tem intervalo
       } catch (err) {
         console.error('Erro ao verificar status:', err);
         setHasFace(false);
@@ -497,10 +499,14 @@ export default function PortalPunch() {
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div className="text-white/70">Entrada:</div>
                     <div className="text-white font-mono">{result.today_summary.entry || '--:--'}</div>
-                    <div className="text-white/70">Início Intervalo:</div>
-                    <div className="text-white font-mono">{result.today_summary.break_start || '--:--'}</div>
-                    <div className="text-white/70">Fim Intervalo:</div>
-                    <div className="text-white font-mono">{result.today_summary.break_end || '--:--'}</div>
+                    {hasBreak && (
+                      <>
+                        <div className="text-white/70">Início Intervalo:</div>
+                        <div className="text-white font-mono">{result.today_summary.break_start || '--:--'}</div>
+                        <div className="text-white/70">Fim Intervalo:</div>
+                        <div className="text-white font-mono">{result.today_summary.break_end || '--:--'}</div>
+                      </>
+                    )}
                     <div className="text-white/70">Saída:</div>
                     <div className="text-white font-mono">{result.today_summary.exit || '--:--'}</div>
                   </div>

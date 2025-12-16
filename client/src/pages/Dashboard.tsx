@@ -22,8 +22,7 @@ import {
   NotificationBanner,
   GreetingHeader,
   CelebrationEffect,
-  ColorVariant,
-  ImprovementsPopup
+  ColorVariant
 } from '../components/dashboard'
 
 // ============================================
@@ -185,17 +184,6 @@ export default function Dashboard() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [showDepartments, setShowDepartments] = useState(false)
   const [showRecentRecords, setShowRecentRecords] = useState(false)
-  const [showImprovements, setShowImprovements] = useState(() => {
-    // Mostrar popup apenas uma vez por versão
-    const version = '2.0.0-dec2025'
-    const seenVersion = localStorage.getItem('improvements_seen')
-    return seenVersion !== version
-  })
-
-  const handleCloseImprovements = () => {
-    setShowImprovements(false)
-    localStorage.setItem('improvements_seen', '2.0.0-dec2025')
-  }
 
   // Verificar se há aniversário hoje
   const hasBirthdayToday = useMemo(() => {
@@ -534,11 +522,6 @@ export default function Dashboard() {
         attendanceGoal={90}
         onClose={handleCloseModal}
       />
-
-      {/* Popup de Melhorias */}
-      {showImprovements && (
-        <ImprovementsPopup onClose={handleCloseImprovements} />
-      )}
     </div>
   )
 }

@@ -6,7 +6,7 @@ import axios from 'axios';
 import { 
   Clock, Calendar, TrendingUp, Bell, Camera, 
   ChevronRight, User, LogOut, Menu, X, Home,
-  FileText, Briefcase, CheckCircle, Inbox, QrCode
+  FileText, Briefcase, CheckCircle, Inbox, QrCode, AlertTriangle
 } from 'lucide-react';
 import { Snowfall, ChristmasLights } from '../../components/christmas';
 import PortalOnboarding from '../../components/portal/PortalOnboarding';
@@ -40,6 +40,9 @@ export default function PortalDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [todayPunches, setTodayPunches] = useState<TodayPunches>({ entry: null, break_start: null, break_end: null, exit: null });
   const [nextPunch, setNextPunch] = useState<string>('entry');
+  const [hasBreak, setHasBreak] = useState<boolean>(true); // Se o horário tem intervalo
+  const [entryBlocked, setEntryBlocked] = useState<boolean>(false); // Se entrada está bloqueada por atraso
+  const [entryBlockedMessage, setEntryBlockedMessage] = useState<string>(''); // Mensagem de bloqueio
   const [hourBank, setHourBank] = useState<HourBankData | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -67,6 +70,9 @@ export default function PortalDashboard() {
 
       setTodayPunches(todayRes.data.punches);
       setNextPunch(todayRes.data.nextPunch);
+      setHasBreak(todayRes.data.hasBreak !== false); // Default true para compatibilidade
+      setEntryBlocked(todayRes.data.entryBlocked || false);
+      setEntryBlockedMessage(todayRes.data.entryBlockedMessage || '');
       setHourBank(hourBankRes.data);
       setNotifications(notificationsRes.data.notifications.slice(0, 5));
       setUnreadCount(notificationsRes.data.unread_count);
@@ -267,13 +273,28 @@ export default function PortalDashboard() {
               <p className="text-white/50 mt-2 capitalize">{formattedDate}</p>
             </div>
             
+            {/* Alerta de Entrada Bloqueada */}
+            {entryBlocked && (
+              <div className="mt-4 p-4 bg-red-500/20 border border-red-500/30 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-red-400 font-semibold">Entrada não permitida</p>
+                    <p className="text-red-400/80 text-sm mt-1">{entryBlockedMessage}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             {/* Botão de Registro */}
             <button
               onClick={() => navigate('/portal/ponto')}
-              disabled={nextPunch === 'completed'}
+              disabled={nextPunch === 'completed' || entryBlocked}
               className={`w-full mt-4 py-4 rounded-xl font-semibold text-lg transition-all transform hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-3 ${
                 nextPunch === 'completed'
                   ? 'bg-green-500/20 text-green-400 cursor-default'
+                  : entryBlocked
+                  ? 'bg-red-500/20 text-red-400 cursor-not-allowed'
                   : 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white'
               }`}
             >
@@ -281,6 +302,11 @@ export default function PortalDashboard() {
                 <>
                   <CheckCircle className="w-6 h-6" />
                   Ponto completo hoje
+                </>
+              ) : entryBlocked ? (
+                <>
+                  <AlertTriangle className="w-6 h-6" />
+                  Entrada bloqueada
                 </>
               ) : (
                 <>
@@ -299,11 +325,11 @@ export default function PortalDashboard() {
             </h3>
             <div className="space-y-3">
               {[
-                { key: 'entry', label: 'Entrada', color: 'green' },
-                { key: 'break_start', label: 'Início Intervalo', color: 'yellow' },
-                { key: 'break_end', label: 'Fim Intervalo', color: 'blue' },
-                { key: 'exit', label: 'Saída', color: 'red' },
-              ].map((punch) => (
+                { key: 'entry', label: 'Entrada', color: 'green', showAlways: true },
+                { key: 'break_start', label: 'Início Intervalo', color: 'yellow', showAlways: false },
+                { key: 'break_end', label: 'Fim Intervalo', color: 'blue', showAlways: false },
+                { key: 'exit', label: 'Saída', color: 'red', showAlways: true },
+              ].filter(punch => punch.showAlways || hasBreak).map((punch) => (
                 <div key={punch.key} className="flex items-center justify-between">
                   <span className="text-white/70 text-sm">{punch.label}</span>
                   <span className={`font-mono ${

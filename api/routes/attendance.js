@@ -90,6 +90,41 @@ router.post('/', authenticateToken, async (req, res) => {
 
     logger.debug('Tipo de ponto', { type: punchInfo.type });
 
+    // 4.1 Bloquear entrada se estiver mais de X minutos atrasado (configurável)
+    if (punchInfo.type === 'entry' && schedule?.start_time) {
+      // Buscar tolerância configurada
+      const settingsResult = await pool.query(
+        'SELECT entry_block_tolerance_minutes FROM system_settings ORDER BY id LIMIT 1'
+      );
+      const entryBlockTolerance = settingsResult.rows[0]?.entry_block_tolerance_minutes ?? 60;
+      
+      const [scheduleHour, scheduleMinute] = schedule.start_time.split(':').map(Number);
+      const [currentHour, currentMinute] = time.split(':').map(Number);
+      
+      const scheduleMinutes = scheduleHour * 60 + scheduleMinute;
+      const currentMinutes = currentHour * 60 + currentMinute;
+      const diffMinutes = currentMinutes - scheduleMinutes;
+      
+      // Se estiver mais de X minutos atrasado, bloquear
+      if (diffMinutes > entryBlockTolerance) {
+        logger.info('Entrada bloqueada por atraso excessivo', { 
+          employee_id, 
+          schedule_time: schedule.start_time, 
+          current_time: time,
+          delay_minutes: diffMinutes,
+          tolerance_minutes: entryBlockTolerance
+        });
+        return res.status(403).json({
+          error: 'Não é possível registrar entrada',
+          message: `Você está ${diffMinutes} minutos atrasado. O limite para registro de entrada é de ${entryBlockTolerance} minutos após o horário definido (${schedule.start_time}). Para justificar, procure o RH.`,
+          type: 'late_entry_blocked',
+          schedule_time: schedule.start_time,
+          current_time: time,
+          delay_minutes: diffMinutes
+        });
+      }
+    }
+
     // 5. Validar horário
     const timeValidation = validatePunchTime(punchInfo.type, time, schedule, 30);
 

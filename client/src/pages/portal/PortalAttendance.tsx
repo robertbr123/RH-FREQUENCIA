@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { 
   ArrowLeft, Calendar, Clock, ChevronLeft, ChevronRight,
-  CheckCircle, XCircle, Loader2
+  CheckCircle, XCircle, Loader2, AlertTriangle
 } from 'lucide-react';
 import { Snowfall } from '../../components/christmas';
+import { SkeletonAttendanceList } from '../../components/portal/Skeleton';
 
 interface AttendanceRecord {
   date: string;
@@ -66,6 +67,16 @@ export default function PortalAttendance() {
 
   const isComplete = (record: AttendanceRecord) => {
     return record.entry_time && record.exit_time;
+  };
+
+  const isAbsent = (record: AttendanceRecord) => {
+    return !record.entry_time && !record.exit_time && !record.break_start && !record.break_end;
+  };
+
+  const getRecordStatus = (record: AttendanceRecord): 'complete' | 'incomplete' | 'absent' => {
+    if (isAbsent(record)) return 'absent';
+    if (isComplete(record)) return 'complete';
+    return 'incomplete';
   };
 
   const calculateHours = (record: AttendanceRecord) => {
@@ -144,10 +155,7 @@ export default function PortalAttendance() {
         {/* Lista de Registros */}
         <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden">
           {loading ? (
-            <div className="p-8 text-center">
-              <Loader2 className="w-8 h-8 text-white animate-spin mx-auto mb-2" />
-              <p className="text-white/50">Carregando...</p>
-            </div>
+            <SkeletonAttendanceList rows={8} />
           ) : records.length === 0 ? (
             <div className="p-8 text-center">
               <Calendar className="w-12 h-12 text-white/30 mx-auto mb-3" />
@@ -166,58 +174,71 @@ export default function PortalAttendance() {
               </div>
 
               {/* Registros */}
-              {records.map((record) => (
-                <div 
-                  key={record.date}
-                  className={`grid grid-cols-6 gap-2 p-3 text-sm ${
-                    isComplete(record) ? '' : 'bg-yellow-500/5'
-                  }`}
-                >
-                  <div className="text-white/80 capitalize text-xs">
-                    {formatDate(record.date)}
+              {records.map((record) => {
+                const status = getRecordStatus(record);
+                return (
+                  <div 
+                    key={record.date}
+                    className={`grid grid-cols-6 gap-2 p-3 text-sm ${
+                      status === 'incomplete' ? 'bg-yellow-500/5' :
+                      status === 'absent' ? 'bg-red-500/5' : ''
+                    }`}
+                  >
+                    <div className="text-white/80 capitalize text-xs">
+                      {formatDate(record.date)}
+                    </div>
+                    <div className="text-center font-mono text-white">
+                      {record.entry_time || <span className="text-white/30">--:--</span>}
+                    </div>
+                    <div className="text-center font-mono text-white">
+                      {record.break_start || <span className="text-white/30">--:--</span>}
+                    </div>
+                    <div className="text-center font-mono text-white">
+                      {record.break_end || <span className="text-white/30">--:--</span>}
+                    </div>
+                    <div className="text-center font-mono text-white">
+                      {record.exit_time || <span className="text-white/30">--:--</span>}
+                    </div>
+                    <div className="text-right flex items-center justify-end gap-1">
+                      {status === 'complete' ? (
+                        <>
+                          <span className="text-green-400 font-medium">
+                            {calculateHours(record)}
+                          </span>
+                          <CheckCircle className="w-4 h-4 text-green-400" />
+                        </>
+                      ) : status === 'absent' ? (
+                        <>
+                          <span className="text-red-400 text-xs">Falta</span>
+                          <AlertTriangle className="w-4 h-4 text-red-400" />
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-yellow-400">-</span>
+                          <XCircle className="w-4 h-4 text-yellow-400" />
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-center font-mono text-white">
-                    {record.entry_time || <span className="text-white/30">--:--</span>}
-                  </div>
-                  <div className="text-center font-mono text-white">
-                    {record.break_start || <span className="text-white/30">--:--</span>}
-                  </div>
-                  <div className="text-center font-mono text-white">
-                    {record.break_end || <span className="text-white/30">--:--</span>}
-                  </div>
-                  <div className="text-center font-mono text-white">
-                    {record.exit_time || <span className="text-white/30">--:--</span>}
-                  </div>
-                  <div className="text-right flex items-center justify-end gap-1">
-                    {isComplete(record) ? (
-                      <>
-                        <span className="text-green-400 font-medium">
-                          {calculateHours(record)}
-                        </span>
-                        <CheckCircle className="w-4 h-4 text-green-400" />
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-yellow-400">-</span>
-                        <XCircle className="w-4 h-4 text-yellow-400" />
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
         {/* Legenda */}
-        <div className="mt-4 flex items-center justify-center gap-6 text-xs text-white/50">
-          <div className="flex items-center gap-1">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-xs text-white/50">
+          <div className="flex items-center gap-1.5 bg-green-500/10 px-3 py-1.5 rounded-full border border-green-500/20">
             <CheckCircle className="w-4 h-4 text-green-400" />
-            <span>Completo</span>
+            <span className="text-green-400">Completo</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5 bg-yellow-500/10 px-3 py-1.5 rounded-full border border-yellow-500/20">
             <XCircle className="w-4 h-4 text-yellow-400" />
-            <span>Incompleto</span>
+            <span className="text-yellow-400">Incompleto</span>
+          </div>
+          <div className="flex items-center gap-1.5 bg-red-500/10 px-3 py-1.5 rounded-full border border-red-500/20">
+            <AlertTriangle className="w-4 h-4 text-red-400" />
+            <span className="text-red-400">Falta</span>
           </div>
         </div>
       </main>

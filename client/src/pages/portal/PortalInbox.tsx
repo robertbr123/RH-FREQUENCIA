@@ -6,6 +6,9 @@ import {
   Info, AlertCircle, Loader2, X, Check, Inbox
 } from 'lucide-react';
 import { Snowfall } from '../../components/christmas';
+import { SwipeableItem } from '../../components/portal/SwipeableItem';
+import { SkeletonNotificationList } from '../../components/portal/Skeleton';
+import { useHapticFeedback } from '../../hooks/useHapticFeedback';
 
 interface Notification {
   id: number;
@@ -23,6 +26,7 @@ export default function PortalInbox() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const { trigger: haptic } = useHapticFeedback();
 
   useEffect(() => {
     loadNotifications();
@@ -74,8 +78,10 @@ export default function PortalInbox() {
       await axios.delete(`/api/portal/notifications/${id}`);
       setNotifications(prev => prev.filter(n => n.id !== id));
       setMessage({ type: 'success', text: 'Notificação excluída' });
+      haptic('success');
     } catch (error) {
       setMessage({ type: 'error', text: 'Erro ao excluir' });
+      haptic('error');
     } finally {
       setActionLoading(null);
       setTimeout(() => setMessage(null), 3000);
@@ -218,9 +224,7 @@ export default function PortalInbox() {
 
         {/* Lista de Notificações */}
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="w-8 h-8 text-white animate-spin" />
-          </div>
+          <SkeletonNotificationList count={5} />
         ) : notifications.length === 0 ? (
           <div className="text-center py-16">
             <Bell className="w-16 h-16 text-white/20 mx-auto mb-4" />
@@ -236,18 +240,24 @@ export default function PortalInbox() {
               const Icon = config.icon;
               
               return (
-                <div
+                <SwipeableItem
                   key={notif.id}
-                  className={`relative bg-white/5 backdrop-blur-xl rounded-xl border transition-all ${
-                    notif.is_read 
-                      ? 'border-white/5 opacity-70' 
-                      : 'border-white/20 shadow-lg'
-                  }`}
+                  onDelete={() => handleDelete(notif.id)}
+                  deleteLabel="Excluir"
+                  disabled={actionLoading === notif.id}
+                  className="rounded-xl"
                 >
-                  {/* Indicador de não lida */}
-                  {!notif.is_read && (
-                    <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                  )}
+                  <div
+                    className={`relative bg-white/5 backdrop-blur-xl rounded-xl border transition-all ${
+                      notif.is_read 
+                        ? 'border-white/5 opacity-70' 
+                        : 'border-white/20 shadow-lg'
+                    }`}
+                  >
+                    {/* Indicador de não lida */}
+                    {!notif.is_read && (
+                      <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    )}
                   
                   <div 
                     className={`p-4 ${notif.link ? 'cursor-pointer hover:bg-white/5' : ''}`}
@@ -272,36 +282,37 @@ export default function PortalInbox() {
                     </div>
                   </div>
                   
-                  {/* Ações */}
-                  <div className="flex items-center justify-end gap-2 px-4 pb-3">
-                    {!notif.is_read && (
+                    {/* Ações */}
+                    <div className="flex items-center justify-end gap-2 px-4 pb-3">
+                      {!notif.is_read && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleMarkAsRead(notif.id); }}
+                          disabled={actionLoading === notif.id}
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-white/50 hover:text-white/80 transition-colors"
+                        >
+                          {actionLoading === notif.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Check className="w-3 h-3" />
+                          )}
+                          Marcar como lida
+                        </button>
+                      )}
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleMarkAsRead(notif.id); }}
+                        onClick={(e) => { e.stopPropagation(); handleDelete(notif.id); }}
                         disabled={actionLoading === notif.id}
-                        className="flex items-center gap-1 px-2 py-1 text-xs text-white/50 hover:text-white/80 transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/70 hover:text-red-400 transition-colors"
                       >
                         {actionLoading === notif.id ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
                         ) : (
-                          <Check className="w-3 h-3" />
+                          <Trash2 className="w-3 h-3" />
                         )}
-                        Marcar como lida
+                        Excluir
                       </button>
-                    )}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDelete(notif.id); }}
-                      disabled={actionLoading === notif.id}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/70 hover:text-red-400 transition-colors"
-                    >
-                      {actionLoading === notif.id ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Trash2 className="w-3 h-3" />
-                      )}
-                      Excluir
-                    </button>
+                    </div>
                   </div>
-                </div>
+                </SwipeableItem>
               );
             })}
           </div>
@@ -310,7 +321,10 @@ export default function PortalInbox() {
         {/* Info */}
         <div className="mt-6 bg-white/5 border border-white/10 rounded-xl p-4">
           <p className="text-white/50 text-sm text-center">
-            💡 Dica: Configure <button onClick={() => navigate('/portal/notificacoes')} className="text-blue-400 underline">lembretes de ponto</button> para receber avisos automáticos.
+            👆 Arraste para esquerda para excluir rapidamente
+          </p>
+          <p className="text-white/50 text-sm text-center mt-2">
+            💡 Configure <button onClick={() => navigate('/portal/notificacoes')} className="text-blue-400 underline">lembretes de ponto</button> para receber avisos automáticos.
           </p>
         </div>
       </main>

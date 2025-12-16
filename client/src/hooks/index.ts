@@ -9,6 +9,7 @@ export { useChristmasSeason } from './useChristmasSeason'
 export { useGeolocation, calculateDistance, isWithinAllowedArea, validateLocationAgainstAllowed, fetchAllowedLocations } from './useGeolocation'
 export { usePushNotifications } from './usePushNotifications'
 export { useServerTime } from './useServerTime'
+export { useHapticFeedback } from './useHapticFeedback'
 export type { 
   Stats, 
   RecentAttendance, 

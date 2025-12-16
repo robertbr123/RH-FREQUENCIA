@@ -6,6 +6,7 @@ import logger from '../utils/logger.js';
 const router = express.Router();
 
 // Lista completa de tabelas do sistema (ordem de dependência para restore)
+// Atualizado em: 13/12/2025 - 25 tabelas
 const ALL_TABLES = [
   // Tabelas base (sem dependências)
   'users',
@@ -23,6 +24,7 @@ const ALL_TABLES = [
   // Tabelas com dependência de tabelas base
   'employees',
   'user_departments',
+  'employee_departments',
   
   // Tabelas com dependência de employees
   'attendance',

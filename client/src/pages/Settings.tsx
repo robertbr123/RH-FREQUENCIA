@@ -46,6 +46,7 @@ interface FormData {
   time_format: string
   language: string
   attendance_tolerance_minutes: number
+  entry_block_tolerance_minutes: number
   max_daily_hours: number
   enable_facial_recognition: boolean
   enable_qr_scanner: boolean
@@ -102,6 +103,7 @@ const DEFAULT_VALUES: FormData = {
   time_format: '24h',
   language: 'pt-BR',
   attendance_tolerance_minutes: 15,
+  entry_block_tolerance_minutes: 60,
   max_daily_hours: 8,
   enable_facial_recognition: true,
   enable_qr_scanner: true,
@@ -533,7 +535,7 @@ export default function Settings() {
     const tabFields: Record<TabType, (keyof FormData)[]> = {
       appearance: ['system_name', 'primary_color', 'logo_url', 'icon_url'],
       company: ['company_name', 'company_address', 'company_phone', 'company_email'],
-      attendance: ['attendance_tolerance_minutes', 'max_daily_hours', 'enable_facial_recognition', 'enable_qr_scanner', 'require_geolocation', 'require_photo'],
+      attendance: ['attendance_tolerance_minutes', 'entry_block_tolerance_minutes', 'max_daily_hours', 'enable_facial_recognition', 'enable_qr_scanner', 'require_geolocation', 'require_photo'],
       system: ['timezone', 'date_format', 'time_format', 'language', 'enable_notifications', 'enable_email_notifications', 'auto_backup_enabled', 'backup_frequency_days'],
       'employee-check': ['ad_enabled', 'ad_title', 'ad_subtitle', 'ad_image_url', 'ad_bg_color_from', 'ad_bg_color_to', 'ad_delay_seconds', 'ec_show_photo', 'ec_show_matricula', 'ec_show_position', 'ec_show_department', 'ec_show_punctuality', 'ec_show_graph', 'ec_show_stats', 'ec_show_vacation_holidays', 'ec_show_records_list', 'ec_records_limit', 'ec_custom_title', 'ec_custom_subtitle'],
       'permissions': [] // Permissões têm gerenciamento próprio
@@ -594,6 +596,10 @@ export default function Settings() {
 
     if (data.attendance_tolerance_minutes < 0 || data.attendance_tolerance_minutes > 60) {
       newErrors.attendance_tolerance_minutes = 'Deve ser entre 0 e 60 minutos'
+    }
+
+    if (data.entry_block_tolerance_minutes < 1 || data.entry_block_tolerance_minutes > 480) {
+      newErrors.entry_block_tolerance_minutes = 'Deve ser entre 1 e 480 minutos (8 horas)'
     }
 
     if (data.max_daily_hours < 1 || data.max_daily_hours > 24) {
@@ -883,6 +889,17 @@ export default function Settings() {
                     tooltip="Minutos de tolerância para entrada/saída sem marcar atraso"
                     min={0}
                     max={60}
+                  />
+
+                  <ValidatedInput
+                    label="Bloqueio Entrada (minutos)"
+                    type="number"
+                    value={formData.entry_block_tolerance_minutes}
+                    onChange={(v) => updateField('entry_block_tolerance_minutes', parseInt(v) || 60)}
+                    error={errors.entry_block_tolerance_minutes}
+                    tooltip="Após este tempo de atraso, funcionário não poderá registrar entrada e deverá procurar o RH"
+                    min={1}
+                    max={480}
                   />
 
                   <ValidatedInput

@@ -247,11 +247,14 @@ router.post('/schedules', authenticateToken, async (req, res) => {
   const { name, start_time, end_time, break_start, break_end, workdays } = req.body;
   try {
     const workdaysJson = Array.isArray(workdays) ? JSON.stringify(workdays) : workdays;
+    // Tratar strings vazias como NULL para campos de intervalo
+    const breakStartValue = break_start && break_start.trim() !== '' ? break_start : null;
+    const breakEndValue = break_end && break_end.trim() !== '' ? break_end : null;
     
     const result = await pool.query(
       `INSERT INTO schedules (name, start_time, end_time, break_start, break_end, workdays) 
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [name, start_time, end_time, break_start || null, break_end || null, workdaysJson]
+      [name, start_time, end_time, breakStartValue, breakEndValue, workdaysJson]
     );
     cache.invalidate(CACHE_KEYS.SCHEDULES);
     res.status(201).json(result.rows[0]);
@@ -266,12 +269,15 @@ router.put('/schedules/:id', authenticateToken, async (req, res) => {
   const { name, start_time, end_time, break_start, break_end, workdays } = req.body;
   try {
     const workdaysJson = Array.isArray(workdays) ? JSON.stringify(workdays) : workdays;
+    // Tratar strings vazias como NULL para campos de intervalo
+    const breakStartValue = break_start && break_start.trim() !== '' ? break_start : null;
+    const breakEndValue = break_end && break_end.trim() !== '' ? break_end : null;
     
     const result = await pool.query(
       `UPDATE schedules 
        SET name = $1, start_time = $2, end_time = $3, break_start = $4, break_end = $5, workdays = $6 
        WHERE id = $7 RETURNING *`,
-      [name, start_time, end_time, break_start || null, break_end || null, workdaysJson, req.params.id]
+      [name, start_time, end_time, breakStartValue, breakEndValue, workdaysJson, req.params.id]
     );
     cache.invalidate(CACHE_KEYS.SCHEDULES);
     res.json(result.rows[0]);
